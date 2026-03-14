@@ -48,8 +48,10 @@ const Chevron: React.FC<{ up?: boolean }> = ({ up }) => (
 );
 
 export const FindingsTable: React.FC<Props> = ({ findings, onAction }) => {
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const [loading,  setLoading]  = useState<string | null>(null);
+  const [expanded,     setExpanded]     = useState<string | null>(null);
+  const [loading,      setLoading]      = useState<string | null>(null);
+  const [explaining,   setExplaining]   = useState<string | null>(null);
+  const [explanations, setExplanations] = useState<Record<string, string>>({});
 
   const handleAction = async (findingId: string, action: string) => {
     setLoading(findingId + action);
@@ -60,6 +62,21 @@ export const FindingsTable: React.FC<Props> = ({ findings, onAction }) => {
       console.error("HITL action failed:", e);
     } finally {
       setLoading(null);
+    }
+  };
+
+  const handleExplain = async (e: React.MouseEvent, findingId: string) => {
+    e.stopPropagation();
+    if (explanations[findingId]) return; // already loaded
+    setExplaining(findingId);
+    try {
+      const res = await api.findings.explain(findingId);
+      setExplanations((prev) => ({ ...prev, [findingId]: res.explanation }));
+    } catch (err) {
+      console.error("Explain failed:", err);
+      setExplanations((prev) => ({ ...prev, [findingId]: "Could not generate explanation. Please try again." }));
+    } finally {
+      setExplaining(null);
     }
   };
 
@@ -231,6 +248,24 @@ export const FindingsTable: React.FC<Props> = ({ findings, onAction }) => {
                     </pre>
                   </div>
                 )}
+
+                {/* Explain Risk */}
+                <div style={{ marginTop: 12 }}>
+                  {explanations[f.id] ? (
+                    <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: "var(--radius-md)", padding: "10px 14px", fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.65 }}>
+                      <div style={{ fontSize: 10, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>Risk Explanation</div>
+                      {explanations[f.id]}
+                    </div>
+                  ) : (
+                    <button
+                      onClick={(e) => handleExplain(e, f.id)}
+                      disabled={explaining === f.id}
+                      style={{ padding: "4px 12px", fontSize: 12, fontWeight: 600, border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", color: "var(--text-secondary)", background: "transparent", cursor: explaining === f.id ? "not-allowed" : "pointer", opacity: explaining === f.id ? 0.6 : 1 }}
+                    >
+                      {explaining === f.id ? "Generating…" : "Explain Risk"}
+                    </button>
+                  )}
+                </div>
 
                 {/* HITL actions */}
                 {f.status === "open" && (

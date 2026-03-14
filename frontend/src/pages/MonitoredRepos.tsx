@@ -40,10 +40,24 @@ export const MonitoredRepos: React.FC = () => {
   const { isDark } = useTheme();
   const esRef = useRef<EventSource | null>(null);
 
-  const [repos,   setRepos]   = useState<Repository[]>([]);
-  const [health,  setHealth]  = useState<Record<string, RepoHealth>>({});
-  const [pings,   setPings]   = useState<Record<string, Ping>>({});
-  const [loading, setLoading] = useState(true);
+  const [repos,    setRepos]    = useState<Repository[]>([]);
+  const [health,   setHealth]   = useState<Record<string, RepoHealth>>({});
+  const [pings,    setPings]    = useState<Record<string, Ping>>({});
+  const [loading,  setLoading]  = useState(true);
+  const [removing, setRemoving] = useState<string | null>(null);
+
+  const handleRemove = async (e: React.MouseEvent, repoId: string) => {
+    e.stopPropagation();
+    setRemoving(repoId);
+    try {
+      await api.repositories.delete(repoId);
+      setRepos((prev) => prev.filter((r) => r.id !== repoId));
+    } catch (err) {
+      console.error("Remove failed:", err);
+    } finally {
+      setRemoving(null);
+    }
+  };
 
   const fetchAll = async () => {
     try {
@@ -160,7 +174,7 @@ export const MonitoredRepos: React.FC = () => {
         {/* Header */}
         <header style={{ position: "sticky", top: 0, zIndex: 10, borderBottom: "1px solid var(--border)", background: "var(--surface)", padding: "0 32px", height: 56, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            <button onClick={() => navigate("/")} style={{ background: "none", border: "none", cursor: "pointer", padding: 0, display: "flex", alignItems: "center", gap: 6, color: "var(--text-muted)", fontSize: 13 }}>
+            <button onClick={() => navigate(-1)} style={{ background: "none", border: "none", cursor: "pointer", padding: 0, display: "flex", alignItems: "center", gap: 6, color: "var(--text-muted)", fontSize: 13 }}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="15 18 9 12 15 6"/>
               </svg>
@@ -271,10 +285,10 @@ export const MonitoredRepos: React.FC = () => {
                       </div>
                     </div>
 
-                    {/* Findings count + live ping */}
-                    <div style={{ flexShrink: 0, textAlign: "right" }}>
+                    {/* Findings count + live ping + remove */}
+                    <div style={{ flexShrink: 0, textAlign: "right", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
                       {h && h.findings != null && (
-                        <div style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 6 }}>
+                        <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>
                           {h.findings} finding{h.findings !== 1 ? "s" : ""}
                         </div>
                       )}
@@ -288,6 +302,13 @@ export const MonitoredRepos: React.FC = () => {
                           <polyline points="9 18 15 12 9 6"/>
                         </svg>
                       )}
+                      <button
+                        onClick={(e) => handleRemove(e, repo.id)}
+                        disabled={removing === repo.id}
+                        style={{ padding: "3px 10px", fontSize: 11, fontWeight: 500, border: "1px solid var(--danger-border)", borderRadius: "var(--radius-sm)", color: "var(--danger)", background: "transparent", cursor: removing === repo.id ? "not-allowed" : "pointer", opacity: removing === repo.id ? 0.5 : 1 }}
+                      >
+                        {removing === repo.id ? "Removing…" : "Remove"}
+                      </button>
                     </div>
                   </div>
                 );

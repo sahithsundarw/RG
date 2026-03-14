@@ -105,6 +105,11 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   return res.json();
 }
 
+async function del(path: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}${path}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`API error ${res.status}: ${await res.text()}`);
+}
+
 // ── Scan types ────────────────────────────────────────────────────────────────
 
 // ── Project detection types ───────────────────────────────────────────────────
@@ -176,6 +181,7 @@ export const api = {
     list: () => get<Repository[]>("/api/repositories"),
     get: (id: string) => get<Repository>(`/api/repositories/${id}`),
     create: (data: Partial<Repository>) => post<Repository>("/api/repositories", data),
+    delete: (id: string) => del(`/api/repositories/${id}`),
     detectProjects: (repoUrl: string) =>
       post<DetectProjectsResponse>("/api/repositories/detect-projects", { repo_url: repoUrl }),
   },
@@ -193,6 +199,7 @@ export const api = {
       return get<Finding[]>(`/api/findings?${q.toString()}`);
     },
     get: (id: string) => get<Finding>(`/api/findings/${id}`),
+    explain: (id: string) => post<{ explanation: string; cached: boolean }>(`/api/findings/${id}/explain`, {}),
   },
   hitl: {
     action: (findingId: string, action: string, reasonCode?: string) =>

@@ -30,6 +30,10 @@ async def broadcast(event: dict) -> None:
         except asyncio.QueueFull:
             dead.add(q)
     _subscribers.difference_update(dead)
+    logger.info(
+        "[events] broadcast type=%s to %d subscribers (%d dropped)",
+        event.get("type"), len(_subscribers), len(dead),
+    )
 
 
 @router.get("/stream")
@@ -37,6 +41,7 @@ async def events_stream() -> StreamingResponse:
     """SSE stream — yields a notification whenever a webhook event is processed."""
     queue: asyncio.Queue = asyncio.Queue(maxsize=50)
     _subscribers.add(queue)
+    logger.info("[events] SSE client connected, total subscribers: %d", len(_subscribers))
 
     async def generator() -> AsyncIterator[str]:
         try:
@@ -48,6 +53,7 @@ async def events_stream() -> StreamingResponse:
                     yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
         finally:
             _subscribers.discard(queue)
+            logger.info("[events] SSE client disconnected, total subscribers: %d", len(_subscribers))
 
     return StreamingResponse(
         generator(),

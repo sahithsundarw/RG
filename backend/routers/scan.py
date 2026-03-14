@@ -545,6 +545,17 @@ def _persist_scan_results(
 
     now = datetime.now(timezone.utc)
 
+    # Auto-resolve all previously open findings for this repo so each scan
+    # produces a fresh health score rather than accumulating stale findings.
+    old_findings = storage.list_findings(repo_id=repo_id, status="open", limit=10000)
+    for old_f in old_findings:
+        storage.update_finding(old_f["id"], {
+            "status": "auto_resolved",
+            "resolved_at": now.isoformat(),
+        })
+    if old_findings:
+        logger.info("[scan] Auto-resolved %d stale findings for repo %s before new scan", len(old_findings), repo_id)
+
     # Save individual findings
     sev_map = {"CRITICAL": "CRITICAL", "HIGH": "HIGH", "MEDIUM": "MEDIUM", "LOW": "LOW", "INFO": "INFO"}
     for f in findings:

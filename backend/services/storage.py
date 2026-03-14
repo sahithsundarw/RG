@@ -18,6 +18,7 @@ _findings: dict[str, dict] = {}        # finding_id (str) -> finding dict
 _health_records: list[dict] = []       # list of health record dicts
 _hitl_states: list[dict] = []          # list of HITL state dicts
 _audit_logs: list[dict] = []           # list of audit log dicts
+_explanations: dict[str, str] = {}     # finding_id (str) -> LLM explanation text
 
 
 # ── Repository operations ──────────────────────────────────────────────────────
@@ -131,3 +132,13 @@ def get_audit_logs(repo_id: str, limit: int = 10) -> list[dict]:
     logs = [lg for lg in _audit_logs if lg.get("repository_id") == repo_id]
     logs.sort(key=lambda lg: lg.get("timestamp", datetime.min), reverse=True)
     return logs[:limit]
+
+
+# ── Explanation cache operations ───────────────────────────────────────────────
+
+def save_explanation(finding_id: str, text: str) -> None:
+    _explanations[finding_id] = text
+
+
+def get_explanation(finding_id: str) -> Optional[str]:
+    return _explanations.get(finding_id)
