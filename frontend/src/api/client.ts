@@ -2,7 +2,8 @@
  * Typed API client for RepoGuardian backend.
  */
 
-const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+// In dev: proxy via Vite (localhost:8000). In prod: same origin (empty string).
+const BASE_URL = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? "http://localhost:8000" : "");
 
 export interface HealthDashboard {
   repo_id: string;
@@ -174,11 +175,7 @@ export const api = {
   scan: {
     start: (repoUrl: string) => post<ScanStartResponse>("/api/scan", { repo_url: repoUrl }),
     result: (scanId: string) => get<ScanResult>(`/api/scan/${scanId}/result`),
-    // In dev: relative path (Vite proxy). In prod: full backend URL.
-    streamUrl: (scanId: string) =>
-      BASE_URL === "http://localhost:8000"
-        ? `/api/scan/${scanId}/stream`
-        : `${BASE_URL}/api/scan/${scanId}/stream`,
+    streamUrl: (scanId: string) => `${BASE_URL}/api/scan/${scanId}/stream`,
   },
   monitoring: {
     register: (config: MonitoringConfig) => {

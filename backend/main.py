@@ -12,12 +12,14 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import structlog
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from backend.config import get_settings
 from backend.routers import (
@@ -108,17 +110,33 @@ app.include_router(findings_router)
 app.include_router(hitl_router)
 app.include_router(scan_router)
 
+# ── Serve frontend static files ────────────────────────────────────────────────
 
-# ── Root & health-check endpoints ─────────────────────────────────────────────
+_frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
+if _frontend_dist.exists():
+    app.mount("/assets", StaticFiles(directory=str(_frontend_dist / "assets")), name="assets")
 
-@app.get("/", include_in_schema=False)
-async def root():
-    return {
-        "service": settings.app_name,
-        "version": settings.app_version,
-        "status": "running",
-        "docs": "/docs",
-    }
+    @app.get("/", include_in_schema=False)
+    async def serve_index():
+        return FileResponse(str(_frontend_dist / "index.html"))
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str):
+        # Let API routes pass through; serve index.html for everything else
+        file = _frontend_dist / full_path
+        if file.exists() and file.is_file():
+            return FileResponse(str(file))
+        return FileResponse(str(_frontend_dist / "index.html"))
+
+else:
+    @app.get("/", include_in_schema=False)
+    async def root():
+        return {
+            "service": settings.app_name,
+            "version": settings.app_version,
+            "status": "running",
+            "docs": "/docs",
+        }
 
 
 @app.get("/health", include_in_schema=False)
