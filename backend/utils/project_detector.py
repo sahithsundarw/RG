@@ -12,12 +12,29 @@ from pathlib import Path
 # Maps indicator filename → display language name.
 # Ordered so the most specific matches come first when multiple files exist.
 _INDICATORS: dict[str, str] = {
+    # Dependency/build manifests (most specific — checked first)
     "package.json":      "Node.js",
     "requirements.txt":  "Python",
     "pyproject.toml":    "Python",
+    "setup.py":          "Python",
+    "setup.cfg":         "Python",
     "go.mod":            "Go",
     "pom.xml":           "Java",
+    "build.gradle":      "Java",
+    "build.gradle.kts":  "Java",
     "Cargo.toml":        "Rust",
+    "Gemfile":           "Ruby",
+    "composer.json":     "PHP",
+    "mix.exs":           "Elixir",
+    # Framework / entry-point files (fallback when no manifest is present)
+    "manage.py":         "Python",
+    "app.py":            "Python",
+    "main.py":           "Python",
+    "tsconfig.json":     "TypeScript",
+    "next.config.js":    "Next.js",
+    "next.config.ts":    "Next.js",
+    "nuxt.config.js":    "Nuxt.js",
+    "nuxt.config.ts":    "Nuxt.js",
 }
 
 _SKIP_DIRS: frozenset[str] = frozenset({
