@@ -88,7 +88,8 @@ export const Dashboard: React.FC = () => {
   const [findings,  setFindings]  = useState<Finding[]>([]);
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"all" | "CRITICAL" | "HIGH" | "MEDIUM" | "LOW">("all");
+  const [activeTab,  setActiveTab]  = useState<"all" | "CRITICAL" | "HIGH" | "MEDIUM" | "LOW">("all");
+  const [agentFilter, setAgentFilter] = useState<string>("all");
 
   const fetchData = async () => {
     if (!repoId) return;
@@ -147,9 +148,13 @@ export const Dashboard: React.FC = () => {
     </div>
   );
 
-  const filteredFindings = activeTab === "all"
-    ? findings
-    : findings.filter((f) => f.severity === activeTab);
+  const agentSources = Array.from(new Set(findings.map((f) => f.agent_source))).sort();
+
+  const filteredFindings = findings.filter((f) => {
+    const sevMatch = activeTab === "all" || f.severity === activeTab;
+    const agentMatch = agentFilter === "all" || f.agent_source === agentFilter;
+    return sevMatch && agentMatch;
+  });
 
   const findingCounts = {
     all:      findings.length,
@@ -418,6 +423,26 @@ export const Dashboard: React.FC = () => {
               );
             })}
           </div>
+
+          {agentSources.length > 1 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+              <span style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Agent:</span>
+              <select
+                value={agentFilter}
+                onChange={(e) => setAgentFilter(e.target.value)}
+                style={{
+                  fontSize: 12, padding: "4px 8px", border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-sm)", background: "var(--surface)",
+                  color: "var(--text-primary)", cursor: "pointer",
+                }}
+              >
+                <option value="all">All agents</option>
+                {agentSources.map((a) => (
+                  <option key={a} value={a}>{a.replace(/_/g, " ")}</option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <FindingsTable findings={filteredFindings} onAction={fetchData} />
         </div>

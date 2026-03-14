@@ -44,6 +44,7 @@ class FindingCategory(str, enum.Enum):
     DOCUMENTATION = "DOCUMENTATION"
     DEPENDENCY = "DEPENDENCY"
     CODE_SMELL = "CODE_SMELL"
+    TEST_COVERAGE = "TEST_COVERAGE"
 
 
 class FindingStatus(str, enum.Enum):

@@ -83,6 +83,7 @@ export interface Finding {
   cwe_id: string | null;
   confidence: number;
   agent_source: string;
+  multi_agent_agreement: boolean;
   status: string;
   pr_number: number | null;
   created_at: string;

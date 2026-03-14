@@ -267,6 +267,24 @@ class FeedbackSynthesizerAgent:
             lines.append("**Findings:** ✨ No significant issues detected")
         lines.append("")
 
+        # Agent breakdown
+        from collections import Counter
+        agent_counts: Counter = Counter(f.agent_source for f in findings)
+        if agent_counts:
+            lines.append("### Agent Analysis Summary")
+            lines.append("")
+            agent_labels = {
+                "pr_review": "PR Review",
+                "security_scanner": "Security Scanner",
+                "code_quality": "Code Quality",
+                "dependency_auditor": "Dependency Audit",
+                "doc_verifier": "Documentation",
+            }
+            for agent, count in sorted(agent_counts.items(), key=lambda x: -x[1]):
+                label = agent_labels.get(agent, agent.replace("_", " ").title())
+                lines.append(f"- **{label}:** {count} finding{'s' if count != 1 else ''}")
+            lines.append("")
+
         # Key findings (critical + high only in summary)
         key_findings = by_severity["CRITICAL"] + by_severity["HIGH"]
         if key_findings:

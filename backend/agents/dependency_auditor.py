@@ -85,14 +85,19 @@ class DependencyAuditorAgent(BaseAgent):
         # Query OSV API for vulnerabilities
         vulnerable_packages = await self._query_osv_batch(all_packages)
 
+        # Check for outdated packages and license issues via registry APIs
+        outdated_packages, license_issues = await self._check_registry_metadata(all_packages)
+
         # Convert to findings
         findings = self._vuln_packages_to_findings(vulnerable_packages)
+        findings += self._outdated_to_findings(outdated_packages)
+        findings += self._license_to_findings(license_issues)
 
         return DependencyReport(
             agent_source=self.name,
             vulnerable_packages=vulnerable_packages,
-            outdated_packages=[],     # Would require registry API calls
-            license_issues=[],        # Would require license DB
+            outdated_packages=outdated_packages,
+            license_issues=license_issues,
             findings=findings,
             total_token_cost=self.total_token_cost,
         )
@@ -270,6 +275,110 @@ class DependencyAuditorAgent(BaseAgent):
                 except ValueError:
                     pass
         return None
+
+    # ── Registry metadata (outdated + license) ────────────────────────────────
+
+    async def _check_registry_metadata(
+        self, packages: list[dict]
+    ) -> tuple[list[dict], list[dict]]:
+        """Check PyPI/npm for latest versions and license info."""
+        outdated: list[dict] = []
+        license_issues: list[dict] = []
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            tasks = [self._fetch_registry_info(client, pkg) for pkg in packages]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for pkg, result in zip(packages, results):
+            if isinstance(result, Exception) or result is None:
+                continue
+            latest_version, license_id = result
+
+            # Outdated check — flag if installed version differs from latest
+            if latest_version and latest_version != pkg["version"] and pkg["version"] not in ("", "*", "latest"):
+                outdated.append({
+                    "name": pkg["name"],
+                    "installed_version": pkg["version"],
+                    "latest_version": latest_version,
+                    "ecosystem": pkg["ecosystem"],
+                })
+
+            # License compliance check
+            if license_id and any(l in license_id for l in _COPYLEFT_LICENSES):
+                license_issues.append({
+                    "name": pkg["name"],
+                    "version": pkg["version"],
+                    "license": license_id,
+                    "ecosystem": pkg["ecosystem"],
+                })
+
+        return outdated, license_issues
+
+    async def _fetch_registry_info(
+        self, client: httpx.AsyncClient, pkg: dict
+    ) -> Optional[tuple[str, str]]:
+        """Return (latest_version, license_id) from the package registry."""
+        try:
+            ecosystem = pkg["ecosystem"]
+            name = pkg["name"]
+            if ecosystem == "PyPI":
+                resp = await client.get(f"https://pypi.org/pypi/{name}/json")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    latest = data.get("info", {}).get("version", "")
+                    lic = data.get("info", {}).get("license") or ""
+                    return latest, lic
+            elif ecosystem == "npm":
+                resp = await client.get(f"https://registry.npmjs.org/{name}/latest")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    latest = data.get("version", "")
+                    lic = data.get("license") or ""
+                    return latest, lic
+        except Exception:
+            pass
+        return None
+
+    def _outdated_to_findings(self, outdated: list[dict]) -> list[AgentFinding]:
+        findings = []
+        for pkg in outdated:
+            findings.append(AgentFinding(
+                agent_source=self.name,
+                category=FindingCategory.DEPENDENCY,
+                severity=Severity.LOW,
+                title=f"Outdated dependency: {pkg['name']} ({pkg['installed_version']} → {pkg['latest_version']})",
+                description=(
+                    f"`{pkg['name']}` is pinned to `{pkg['installed_version']}` but "
+                    f"`{pkg['latest_version']}` is available. Outdated packages may miss security patches."
+                ),
+                evidence=f"{pkg['name']}=={pkg['installed_version']}",
+                suggested_fix=f"Upgrade `{pkg['name']}` to `{pkg['latest_version']}` and run tests.",
+                reasoning="Latest version from registry differs from installed version.",
+                confidence=0.90,
+            ))
+        return findings
+
+    def _license_to_findings(self, license_issues: list[dict]) -> list[AgentFinding]:
+        findings = []
+        for pkg in license_issues:
+            findings.append(AgentFinding(
+                agent_source=self.name,
+                category=FindingCategory.DEPENDENCY,
+                severity=Severity.MEDIUM,
+                title=f"Copyleft license: {pkg['name']} ({pkg['license']})",
+                description=(
+                    f"`{pkg['name']}` uses the `{pkg['license']}` license which may require "
+                    f"your project to also be open-sourced under the same terms."
+                ),
+                evidence=f"{pkg['name']}=={pkg['version']} ({pkg['license']})",
+                suggested_fix=(
+                    f"Review whether `{pkg['license']}` is compatible with your project's license. "
+                    f"Consider an alternative library with a permissive license (MIT/Apache-2.0)."
+                ),
+                reasoning=f"{pkg['license']} is a copyleft license that may conflict with proprietary code.",
+                confidence=0.85,
+            ))
+        return findings
 
     # ── Finding conversion ─────────────────────────────────────────────────────
 

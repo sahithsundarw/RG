@@ -51,6 +51,7 @@ _CATEGORY_TO_SUBSCORE = {
     FindingCategory.SECURITY.value:      "security",
     FindingCategory.DEPENDENCY.value:    "dependencies",
     FindingCategory.DOCUMENTATION.value: "documentation",
+    FindingCategory.TEST_COVERAGE.value: "test_coverage",
 }
 
 

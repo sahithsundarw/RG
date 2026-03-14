@@ -177,9 +177,21 @@ export const FindingsTable: React.FC<Props> = ({ findings, onAction }) => {
                 {sc.label}
               </span>
 
-              {/* Confidence */}
-              <span style={{ color: "var(--text-muted)", fontSize: 11, minWidth: 32, textAlign: "right", flexShrink: 0 }}>
-                {Math.round(f.confidence * 100)}%
+              {/* Confidence + multi-agent badge */}
+              <span style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
+                {f.multi_agent_agreement && (
+                  <span title="Flagged by multiple agents" style={{
+                    fontSize: 9, fontWeight: 700, padding: "1px 5px",
+                    background: "var(--accent-soft)", color: "var(--accent)",
+                    border: "1px solid var(--accent)", borderRadius: "var(--radius-sm)",
+                    letterSpacing: "0.04em", textTransform: "uppercase",
+                  }}>
+                    Multi-agent
+                  </span>
+                )}
+                <span style={{ color: "var(--text-muted)", fontSize: 11, minWidth: 32, textAlign: "right" }}>
+                  {Math.round(f.confidence * 100)}%
+                </span>
               </span>
 
               <span style={{ flexShrink: 0 }}>

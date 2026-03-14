@@ -388,6 +388,7 @@ class FindingResponse(BaseModel):
     cwe_id: str | None
     confidence: float
     agent_source: str
+    multi_agent_agreement: bool = False
     status: FindingStatus
     pr_number: int | None
     created_at: datetime

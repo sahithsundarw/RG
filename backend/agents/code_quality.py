@@ -120,6 +120,9 @@ class CodeQualityAgent(BaseAgent):
         dead_code_findings = self._check_dead_code(context)
         findings.extend(dead_code_findings)
 
+        # Check test coverage — flag if source files changed but no test files present
+        findings.extend(self._check_test_coverage(context))
+
         return findings
 
     def _check_deep_nesting(self, context: ContextPackage) -> list[AgentFinding]:
@@ -173,6 +176,39 @@ class CodeQualityAgent(BaseAgent):
                     break  # one per hunk
 
         return findings
+
+    def _check_test_coverage(self, context: ContextPackage) -> list[AgentFinding]:
+        """Flag when source files are modified but no tests exist for them."""
+        test_patterns = re.compile(r"(test_|_test\.py$|\.test\.[jt]sx?$|spec\.[jt]sx?$|__tests__)", re.IGNORECASE)
+        source_files = [
+            f for f in context.changed_files
+            if not test_patterns.search(f) and re.search(r"\.(py|ts|tsx|js|jsx|go|java|rs)$", f)
+        ]
+        has_tests = bool(context.relevant_test_files) or any(
+            test_patterns.search(f) for f in context.changed_files
+        )
+        if source_files and not has_tests:
+            files_str = ", ".join(f"`{f}`" for f in source_files[:3])
+            extra = f" and {len(source_files) - 3} more" if len(source_files) > 3 else ""
+            return [AgentFinding(
+                agent_source=self.name,
+                file_path=source_files[0],
+                category=FindingCategory.TEST_COVERAGE,
+                severity=Severity.MEDIUM,
+                title="No tests found for changed source files",
+                description=(
+                    f"The PR modifies {files_str}{extra} but no corresponding test files were found. "
+                    f"Untested code increases the risk of regressions."
+                ),
+                evidence="\n".join(source_files[:5]),
+                suggested_fix=(
+                    "Add unit tests covering the changed code paths. "
+                    "Aim for at least one test per public function/method modified."
+                ),
+                reasoning="Changed source files detected with no matching test files in context.",
+                confidence=0.80,
+            )]
+        return []
 
     def _check_dead_code(self, context: ContextPackage) -> list[AgentFinding]:
         """Detect obvious dead code patterns."""

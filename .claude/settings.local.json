@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(echo \"    scan_path: scanPath.trim\\(\\).replace\\(/^\\\\/|\\\\/$/g, ''''\\), // strip leading/trailing slashes\")",
+      "Bash(echo \"    scan_path: config.scan_path || '''',\")",
+      "Bash(echo \"  -> This reads ''scan_path'' from config.scan_path - CORRECT\")",
+      "Bash(echo \"  -> Reads scan_path from config - CORRECT\")"
+    ]
+  }
+}

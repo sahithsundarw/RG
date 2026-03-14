@@ -254,11 +254,11 @@ class HITLGatewayAgent:
 
     def _determine_status(self, report: SynthesizedReport) -> tuple[str, str]:
         if report.critical_findings and settings.hitl_block_merge_on_critical:
-            return "failure", f"❌ {len(report.critical_findings)} critical issues require attention"
+            return "failure", f"❌ {len(report.critical_findings)} critical issue(s) must be resolved before merging"
         elif report.high_findings:
-            return "success", f"⚠️ Review complete — {len(report.high_findings)} high-severity findings"
+            return "pending", f"⚠️ {len(report.high_findings)} high-severity finding(s) require review before merging"
         elif report.findings:
-            return "success", f"✅ Review complete — {len(report.findings)} minor findings"
+            return "success", f"✅ Review complete — {len(report.findings)} minor finding(s)"
         else:
             return "success", "✅ RepoGuardian review complete — no significant issues"
 
