@@ -22,6 +22,27 @@ function mapMessageToProgress(msg: string): number {
   return 0;
 }
 
+async function findOrRegisterRepo(cloneUrl: string): Promise<string | null> {
+  const m = cloneUrl.match(/(?:github\.com|gitlab\.com|bitbucket\.org)[/:]([^/]+)\/([^/\s.]+?)(?:\.git)?$/);
+  if (!m) return null;
+  const fullName = `${m[1]}/${m[2]}`;
+  try {
+    const repo = await api.monitoring.register({
+      clone_url: cloneUrl,
+      webhook_secret: "",
+      events: { pull_requests: false, pushes: false, merges: false },
+    });
+    return repo.id;
+  } catch {
+    try {
+      const repos = await api.repositories.list();
+      return repos.find((r) => r.full_name === fullName)?.id ?? null;
+    } catch {
+      return null;
+    }
+  }
+}
+
 const inputStyle: React.CSSProperties = {
   width: "100%",
   padding: "10px 12px",
@@ -46,7 +67,6 @@ const primaryBtn: React.CSSProperties = {
   fontWeight: 600,
   cursor: "pointer",
   letterSpacing: "0.01em",
-  transition: "background 0.15s",
 };
 
 const outlineBtn: React.CSSProperties = {
@@ -59,12 +79,11 @@ const outlineBtn: React.CSSProperties = {
   fontSize: 14,
   fontWeight: 600,
   cursor: "pointer",
-  transition: "background 0.15s",
 };
 
 export const RepositoryList: React.FC = () => {
   const navigate = useNavigate();
-  const esRef = useRef<EventSource | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   const [phase, setPhase] = useState<AuditPhase>("idle");
   const [repoUrl, setRepoUrl] = useState("");
@@ -77,8 +96,8 @@ export const RepositoryList: React.FC = () => {
   const [urlFocused, setUrlFocused] = useState(false);
 
   const resetToIdle = () => {
-    esRef.current?.close();
-    esRef.current = null;
+    abortRef.current?.abort();
+    abortRef.current = null;
     setPhase("idle");
     setProgress(0);
     setStatusText("Starting audit...");
@@ -93,52 +112,68 @@ export const RepositoryList: React.FC = () => {
     setProgress(5);
     setStatusText("Initializing audit...");
 
+    const abort = new AbortController();
+    abortRef.current = abort;
+
     try {
+      // Step 1: Start scan
       const { scan_id } = await api.scan.start(repoUrl.trim());
 
-      const es = new EventSource(api.scan.streamUrl(scan_id));
-      esRef.current = es;
+      // Step 2: Stream progress via fetch (more reliable than EventSource through Vite proxy)
+      const response = await fetch(`/api/scan/${scan_id}/stream`, { signal: abort.signal });
+      if (!response.ok) throw new Error(`Stream failed: HTTP ${response.status}`);
+      if (!response.body) throw new Error("No response body from stream");
 
-      es.onmessage = (e: MessageEvent) => {
-        let ev: SseEvent;
-        try { ev = JSON.parse(e.data); } catch { return; }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
 
-        if (ev.type === "heartbeat") return;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-        if (ev.type === "progress") {
-          setStatusText(ev.message);
-          const mapped = mapMessageToProgress(ev.message);
-          if (mapped > 0) setProgress(mapped);
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const text = line.slice(6).trim();
+          if (!text) continue;
+
+          let ev: SseEvent;
+          try { ev = JSON.parse(text); } catch { continue; }
+
+          if (ev.type === "heartbeat") continue;
+
+          if (ev.type === "progress") {
+            setStatusText(ev.message);
+            const mapped = mapMessageToProgress(ev.message);
+            if (mapped > 0) setProgress(mapped);
+          }
+
+          if (ev.type === "done") {
+            setProgress(100);
+            setResult(ev);
+            // Register/find repo to get dashboard ID
+            const id = await findOrRegisterRepo(repoUrl.trim()).catch(() => null);
+            if (id) setSavedRepoId(id);
+            setPhase("complete");
+            return;
+          }
+
+          if (ev.type === "error") {
+            throw new Error(ev.message);
+          }
         }
+      }
 
-        if (ev.type === "done") {
-          setProgress(100);
-          setResult(ev);
-          es.close();
-          esRef.current = null;
-          // Fetch full result to get repo_id
-          api.scan.result(scan_id)
-            .then((r) => { if (r.repo_id) setSavedRepoId(r.repo_id); })
-            .catch(() => {})
-            .finally(() => setPhase("complete"));
-        }
+      // Stream ended without a done/error event
+      throw new Error("Scan stream ended unexpectedly. Check if the backend is running.");
 
-        if (ev.type === "error") {
-          setErrorMessage(ev.message);
-          es.close();
-          esRef.current = null;
-          setPhase("error");
-        }
-      };
-
-      es.onerror = () => {
-        setErrorMessage("Connection to server lost. Please try again.");
-        es.close();
-        esRef.current = null;
-        setPhase("error");
-      };
-    } catch (e) {
-      setErrorMessage(String(e));
+    } catch (e: unknown) {
+      if (e instanceof Error && e.name === "AbortError") return; // user cancelled
+      setErrorMessage(e instanceof Error ? e.message : String(e));
       setPhase("error");
     }
   };
@@ -164,11 +199,7 @@ export const RepositoryList: React.FC = () => {
 
       {/* ── IDLE ── */}
       {phase === "idle" && (
-        <div style={{
-          maxWidth: 840,
-          margin: "80px auto",
-          padding: "0 24px",
-        }}>
+        <div style={{ maxWidth: 840, margin: "80px auto", padding: "0 24px" }}>
           <div style={{ marginBottom: 40, textAlign: "center" }}>
             <h1 style={{ fontSize: 28, fontWeight: 800, color: "#0F172A", margin: "0 0 8px" }}>
               Code Intelligence Platform
@@ -179,16 +210,11 @@ export const RepositoryList: React.FC = () => {
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
-            {/* Panel A — Audit */}
+            {/* Panel A */}
             <div style={{
-              background: "#FFFFFF",
-              border: "1px solid #E2E8F0",
-              borderRadius: 12,
-              padding: "28px 24px",
-              boxShadow: "0 1px 3px 0 rgba(0,0,0,0.07)",
-              display: "flex",
-              flexDirection: "column",
-              gap: 16,
+              background: "#FFFFFF", border: "1px solid #E2E8F0", borderRadius: 12,
+              padding: "28px 24px", boxShadow: "0 1px 3px 0 rgba(0,0,0,0.07)",
+              display: "flex", flexDirection: "column", gap: 16,
             }}>
               <div>
                 <div style={{ fontSize: 11, fontWeight: 600, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }}>
@@ -221,16 +247,11 @@ export const RepositoryList: React.FC = () => {
               </button>
             </div>
 
-            {/* Panel B — Monitoring */}
+            {/* Panel B */}
             <div style={{
-              background: "#FFFFFF",
-              border: "1px solid #E2E8F0",
-              borderRadius: 12,
-              padding: "28px 24px",
-              boxShadow: "0 1px 3px 0 rgba(0,0,0,0.07)",
-              display: "flex",
-              flexDirection: "column",
-              gap: 16,
+              background: "#FFFFFF", border: "1px solid #E2E8F0", borderRadius: 12,
+              padding: "28px 24px", boxShadow: "0 1px 3px 0 rgba(0,0,0,0.07)",
+              display: "flex", flexDirection: "column", gap: 16,
             }}>
               <div>
                 <div style={{ fontSize: 11, fontWeight: 600, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }}>
@@ -260,12 +281,8 @@ export const RepositoryList: React.FC = () => {
       {/* ── SCANNING ── */}
       {phase === "scanning" && (
         <div style={{
-          maxWidth: 560,
-          margin: "100px auto",
-          padding: "0 24px",
-          display: "flex",
-          flexDirection: "column",
-          gap: 20,
+          maxWidth: 560, margin: "100px auto", padding: "0 24px",
+          display: "flex", flexDirection: "column", gap: 20,
         }}>
           <div>
             <p style={{ color: "#64748B", fontSize: 13, margin: "0 0 4px" }}>Auditing</p>
@@ -273,39 +290,29 @@ export const RepositoryList: React.FC = () => {
               {repoUrl}
             </p>
           </div>
-
-          {/* Progress bar */}
-          <div>
+          <div style={{ height: 2, background: "#E2E8F0", borderRadius: 2, overflow: "hidden" }}>
             <div style={{
-              height: 2,
-              background: "#E2E8F0",
-              borderRadius: 2,
-              overflow: "hidden",
-            }}>
-              <div style={{
-                height: "100%",
-                width: `${progress}%`,
-                background: "#0F172A",
-                borderRadius: 2,
-                transition: "width 0.6s ease",
-              }} />
-            </div>
+              height: "100%", width: `${progress}%`,
+              background: "#0F172A", borderRadius: 2,
+              transition: "width 0.6s ease",
+            }} />
           </div>
-
           <p style={{ color: "#0F172A", fontSize: 14, margin: 0 }}>{statusText}</p>
+          <button
+            onClick={resetToIdle}
+            style={{ background: "none", border: "none", color: "#94A3B8", fontSize: 13, cursor: "pointer", textAlign: "left", padding: 0 }}
+          >
+            Cancel
+          </button>
         </div>
       )}
 
       {/* ── COMPLETE ── */}
       {phase === "complete" && result && (
         <div style={{
-          maxWidth: 560,
-          margin: "80px auto",
-          padding: "0 24px",
+          maxWidth: 560, margin: "80px auto", padding: "0 24px",
           animation: "fadeIn 0.3s ease",
-          display: "flex",
-          flexDirection: "column",
-          gap: 24,
+          display: "flex", flexDirection: "column", gap: 24,
         }}>
           <div>
             <p style={{ color: "#64748B", fontSize: 12, margin: "0 0 16px", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600 }}>
@@ -341,22 +348,16 @@ export const RepositoryList: React.FC = () => {
                 View Full Report
               </button>
             ) : (
-              <div style={{ color: "#64748B", fontSize: 13 }}>
-                Report not linked to a monitored repo. Register it under Continuous Monitoring to track history.
-              </div>
+              <p style={{ color: "#64748B", fontSize: 13, margin: 0 }}>
+                Audit complete — could not link to a dashboard repo. Try connecting via Option B.
+              </p>
             )}
             <button
               onClick={resetToIdle}
               style={{
-                background: "transparent",
-                border: "none",
-                color: "#64748B",
-                fontSize: 14,
-                cursor: "pointer",
-                padding: "8px 0",
-                textDecoration: "underline",
-                textUnderlineOffset: 3,
-                textAlign: "left" as const,
+                background: "transparent", border: "none", color: "#64748B",
+                fontSize: 14, cursor: "pointer", padding: "8px 0",
+                textDecoration: "underline", textUnderlineOffset: 3, textAlign: "left",
               }}
             >
               Start new audit
@@ -368,20 +369,16 @@ export const RepositoryList: React.FC = () => {
       {/* ── ERROR ── */}
       {phase === "error" && (
         <div style={{
-          maxWidth: 560,
-          margin: "100px auto",
-          padding: "0 24px",
-          display: "flex",
-          flexDirection: "column",
-          gap: 16,
+          maxWidth: 560, margin: "100px auto", padding: "0 24px",
+          display: "flex", flexDirection: "column", gap: 16,
         }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#DC2626" strokeWidth="1.5" strokeLinecap="round">
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#DC2626" strokeWidth="1.5" strokeLinecap="round" style={{ flexShrink: 0, marginTop: 2 }}>
               <circle cx="12" cy="12" r="10" />
               <line x1="12" y1="8" x2="12" y2="12" />
               <line x1="12" y1="16" x2="12.01" y2="16" />
             </svg>
-            <p style={{ color: "#DC2626", fontSize: 14, margin: 0 }}>{errorMessage}</p>
+            <p style={{ color: "#DC2626", fontSize: 14, margin: 0, lineHeight: 1.6 }}>{errorMessage}</p>
           </div>
           <button
             onClick={resetToIdle}
@@ -397,7 +394,10 @@ export const RepositoryList: React.FC = () => {
       <MonitoringModal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
-        onSaved={() => setModalOpen(false)}
+        onSaved={(repoId) => {
+          setModalOpen(false);
+          if (repoId) navigate(`/repo/${repoId}`);
+        }}
       />
     </div>
   );

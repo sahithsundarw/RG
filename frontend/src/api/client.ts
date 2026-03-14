@@ -173,14 +173,27 @@ export const api = {
   scan: {
     start: (repoUrl: string) => post<ScanStartResponse>("/api/scan", { repo_url: repoUrl }),
     result: (scanId: string) => get<ScanResult>(`/api/scan/${scanId}/result`),
-    streamUrl: (scanId: string) => `${BASE_URL}/api/scan/${scanId}/stream`,
+    // Use relative path so Vite proxy handles it — avoids EventSource CORS issues
+    streamUrl: (scanId: string) => `/api/scan/${scanId}/stream`,
   },
   monitoring: {
-    register: (config: MonitoringConfig) =>
-      post<Repository>("/api/repositories", {
+    register: (config: MonitoringConfig) => {
+      // Parse owner, name, platform from clone URL
+      const m = config.clone_url.match(/(?:github\.com|gitlab\.com|bitbucket\.org)[/:]([^/]+)\/([^/\s.]+?)(?:\.git)?$/);
+      if (!m) throw new Error("Could not parse repository URL. Use https://github.com/owner/repo format.");
+      const owner = m[1];
+      const name = m[2];
+      const platform = config.clone_url.includes("gitlab") ? "gitlab"
+        : config.clone_url.includes("bitbucket") ? "bitbucket"
+        : "github";
+      return post<Repository>("/api/repositories", {
+        platform,
+        owner,
+        name,
         clone_url: config.clone_url,
-        webhook_secret: config.webhook_secret,
-        trigger_events: config.events,
-      }),
+        default_branch: "main",
+        config: { webhook_secret: config.webhook_secret, trigger_events: config.events },
+      });
+    },
   },
 };

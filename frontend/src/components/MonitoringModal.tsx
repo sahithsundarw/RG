@@ -6,7 +6,7 @@ import { api } from "../api/client";
 interface Props {
   open: boolean;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (repoId: string | null) => void;
 }
 
 const inputStyle: React.CSSProperties = {
@@ -62,11 +62,31 @@ export const MonitoringModal: React.FC<Props> = ({ open, onClose, onSaved }) => 
         webhook_secret: secret.trim(),
         events: { pull_requests: prEnabled, pushes: pushEnabled, merges: mergeEnabled },
       };
-      await api.monitoring.register(config);
-      onSaved();
+      const repo = await api.monitoring.register(config);
+      onSaved(repo.id);
       onClose();
     } catch (e) {
-      setError(String(e));
+      const msg = String(e);
+      // 409 = already registered — look up repo_id and navigate there
+      if (msg.includes("409")) {
+        try {
+          const repoUrl = url.trim();
+          const m = repoUrl.match(/(?:github\.com|gitlab\.com|bitbucket\.org)[/:]([^/]+)\/([^/\s.]+?)(?:\.git)?$/);
+          if (m) {
+            const fullName = `${m[1]}/${m[2]}`;
+            const repos = await api.repositories.list();
+            const found = repos.find((r) => r.full_name === fullName);
+            onSaved(found?.id ?? null);
+          } else {
+            onSaved(null);
+          }
+        } catch {
+          onSaved(null);
+        }
+        onClose();
+        return;
+      }
+      setError(msg);
     } finally {
       setSaving(false);
     }
