@@ -20,16 +20,22 @@ from backend.models.schemas import RepositoryCreate, RepositoryResponse
 router = APIRouter(prefix="/api/repositories", tags=["repositories"])
 
 
-@router.post("", response_model=RepositoryResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=RepositoryResponse, status_code=status.HTTP_200_OK)
 async def register_repository(body: RepositoryCreate) -> RepositoryResponse:
     """Register a new repository for monitoring."""
     full_name = f"{body.owner}/{body.name}"
 
     existing = storage.get_repo_by_platform_name(body.platform.value, full_name)
     if existing:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Repository {full_name} is already registered.",
+        return RepositoryResponse(
+            id=existing["id"],
+            platform=existing["platform"],
+            full_name=existing["full_name"],
+            clone_url=existing["clone_url"],
+            default_branch=existing["default_branch"],
+            primary_language=existing.get("primary_language"),
+            is_active=existing.get("is_active", True),
+            created_at=existing["created_at"],
         )
 
     repo_id = str(uuid.uuid4())
