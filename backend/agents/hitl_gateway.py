@@ -212,6 +212,26 @@ class HITLGatewayAgent:
             return []
 
         now = datetime.now(timezone.utc)
+
+        # Auto-resolve previous open findings for this repo/PR so each scan
+        # reflects only the current state of the code (not accumulated history).
+        pr_num = event.pr_number
+        old_open = storage.list_findings(repo_id=repo["id"], status="open", limit=10000)
+        stale = [
+            f for f in old_open
+            if (pr_num is None or f.get("pr_number") == pr_num)
+        ]
+        for old_f in stale:
+            storage.update_finding(old_f["id"], {
+                "status": "auto_resolved",
+                "resolved_at": now.isoformat(),
+            })
+        if stale:
+            logger.info(
+                "[hitl_gateway] Auto-resolved %d stale findings for repo %s (pr=%s)",
+                len(stale), event.repo_full_name, pr_num,
+            )
+
         finding_ids = []
         for af in report.findings:
             finding = {

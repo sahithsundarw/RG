@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { api, HealthDashboard, Finding } from "../api/client";
+import { api, HealthDashboard, Finding, SseEvent } from "../api/client";
 import { HealthScoreCard } from "../components/HealthScoreCard";
 import { SubScoreRadar } from "../components/SubScoreRadar";
 import { FindingsTable } from "../components/FindingsTable";
@@ -88,8 +88,13 @@ export const Dashboard: React.FC = () => {
   const [findings,  setFindings]  = useState<Finding[]>([]);
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState<string | null>(null);
-  const [activeTab,  setActiveTab]  = useState<"all" | "CRITICAL" | "HIGH" | "MEDIUM" | "LOW">("all");
+  const [activeTab,   setActiveTab]   = useState<"all" | "CRITICAL" | "HIGH" | "MEDIUM" | "LOW">("all");
   const [agentFilter, setAgentFilter] = useState<string>("all");
+  const [scanning,    setScanning]    = useState(false);
+  const [scanStatus,  setScanStatus]  = useState("");
+  const [scanProgress, setScanProgress] = useState(0);
+  const [scanError,   setScanError]   = useState<string | null>(null);
+  const esRef = useRef<EventSource | null>(null);
 
   const fetchData = async () => {
     if (!repoId) return;
@@ -106,6 +111,64 @@ export const Dashboard: React.FC = () => {
       setLoading(false);
     }
   };
+
+  const progressMap: [string, number][] = [
+    ["clone", 15], ["static", 40], ["security", 55], ["quality", 70],
+    ["dep", 80], ["doc", 85], ["synthesis", 92], ["ai", 92],
+  ];
+
+  const handleRescan = async () => {
+    if (!repoId || scanning) return;
+    setScanError(null);
+    try {
+      const repo = await api.repositories.get(repoId);
+      setScanStatus("Starting scan…");
+      setScanProgress(5);
+      setScanning(true);
+      const { scan_id } = await api.scan.start(repo.clone_url, repo.config?.scan_path);
+      const es = new EventSource(api.scan.streamUrl(scan_id));
+      esRef.current = es;
+      es.onmessage = (e) => {
+        const ev: SseEvent = JSON.parse(e.data);
+        if (ev.type === "heartbeat") return;
+        if (ev.type === "progress") {
+          setScanStatus(ev.message);
+          const msg = ev.message.toLowerCase();
+          const match = progressMap.find(([k]) => msg.includes(k));
+          if (match) setScanProgress(match[1]);
+        }
+        if (ev.type === "done") {
+          setScanProgress(100);
+          setScanStatus("Scan complete — refreshing…");
+          es.close();
+          esRef.current = null;
+          setTimeout(() => {
+            setScanning(false);
+            setScanProgress(0);
+            setScanStatus("");
+            fetchData();
+          }, 800);
+        }
+        if (ev.type === "error") {
+          setScanError(ev.message);
+          es.close();
+          esRef.current = null;
+          setScanning(false);
+        }
+      };
+      es.onerror = () => {
+        setScanError("Connection lost during scan.");
+        es.close();
+        esRef.current = null;
+        setScanning(false);
+      };
+    } catch (err) {
+      setScanError(String(err));
+      setScanning(false);
+    }
+  };
+
+  useEffect(() => () => { esRef.current?.close(); }, []);
 
   useEffect(() => { fetchData(); }, [repoId]);
 
@@ -218,28 +281,61 @@ export const Dashboard: React.FC = () => {
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <button
+            onClick={handleRescan}
+            disabled={scanning}
+            style={{
+              background: scanning ? "var(--accent)" : "var(--accent)",
+              border: "none",
+              borderRadius: "var(--radius-md)",
+              padding: "6px 14px",
+              color: "var(--accent-text)",
+              cursor: scanning ? "not-allowed" : "pointer",
+              fontSize: 12,
+              fontWeight: 600,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 5,
+              opacity: scanning ? 0.75 : 1,
+              transition: "opacity 0.15s",
+            }}
+            onMouseEnter={(e) => { if (!scanning) e.currentTarget.style.background = "var(--accent-hover)"; }}
+            onMouseLeave={(e) => { if (!scanning) e.currentTarget.style.background = "var(--accent)"; }}
+          >
+            {scanning ? (
+              <>
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: "spin 1s linear infinite" }}>
+                  <path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-9-9 9 9 0 0 1 9-9" />
+                </svg>
+                Scanning…
+              </>
+            ) : (
+              <>
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                </svg>
+                Re-scan Now
+              </>
+            )}
+          </button>
+          <button
             onClick={fetchData}
+            disabled={scanning}
             style={{
               background: "transparent",
               border: "1px solid var(--border)",
               borderRadius: "var(--radius-md)",
               padding: "6px 12px",
               color: "var(--text-secondary)",
-              cursor: "pointer",
+              cursor: scanning ? "not-allowed" : "pointer",
               fontSize: 12,
               display: "inline-flex",
               alignItems: "center",
               gap: 5,
+              opacity: scanning ? 0.5 : 1,
               transition: "background 0.15s, border-color 0.15s",
             }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = "var(--surface-hover)";
-              e.currentTarget.style.borderColor = "var(--border-strong)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "transparent";
-              e.currentTarget.style.borderColor = "var(--border)";
-            }}
+            onMouseEnter={(e) => { if (!scanning) { e.currentTarget.style.background = "var(--surface-hover)"; e.currentTarget.style.borderColor = "var(--border-strong)"; }}}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = "var(--border)"; }}
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-9-9 9 9 0 0 1 9-9" />
@@ -250,6 +346,35 @@ export const Dashboard: React.FC = () => {
           <ThemeToggle />
         </div>
       </header>
+
+      {/* ── Scan progress banner ── */}
+      {(scanning || scanError) && (
+        <div style={{
+          borderBottom: "1px solid var(--border)",
+          background: scanError ? "var(--danger-soft)" : "var(--surface)",
+          padding: "10px 40px",
+        }}>
+          {scanError ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2" strokeLinecap="round">
+                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+              </svg>
+              <span style={{ fontSize: 12, color: "var(--danger)" }}>{scanError}</span>
+              <button onClick={() => setScanError(null)} style={{ marginLeft: 8, fontSize: 11, color: "var(--text-muted)", background: "none", border: "none", cursor: "pointer" }}>Dismiss</button>
+            </div>
+          ) : (
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>{scanStatus}</span>
+                <span style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "monospace" }}>{scanProgress}%</span>
+              </div>
+              <div style={{ height: 2, background: "var(--border)", borderRadius: 1 }}>
+                <div style={{ height: "100%", width: `${scanProgress}%`, background: "var(--accent)", borderRadius: 1, transition: "width 0.6s ease" }} />
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Page content ── */}
       <div style={{
