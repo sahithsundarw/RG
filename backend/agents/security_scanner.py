@@ -25,6 +25,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from backend.agents.base import BaseAgent
+from backend.agents.tool_validator import ToolValidator
 from backend.config import get_settings
 from backend.models.database import FindingCategory, Severity
 from backend.models.schemas import AgentFinding, ContextPackage, SecurityReport
@@ -82,23 +83,28 @@ _ALL_PATTERNS = _SECRET_PATTERNS + _INJECTION_PATTERNS + _CRYPTO_PATTERNS + _PAT
 
 # ── System prompt ──────────────────────────────────────────────────────────────
 
-_SECURITY_SYSTEM_PROMPT = """You are a security engineer specialising in application security (AppSec).
-Analyse the provided code diff for security vulnerabilities.
+_SECURITY_SYSTEM_PROMPT = """\
+You are a security engineer acting as a QUALITY GATE for static analysis findings.
 
-CRITICAL RULES:
-1. Only report vulnerabilities where you can quote the EXACT vulnerable code.
-2. For each finding, provide CWE ID, OWASP category, and a concrete remediation.
-3. Do NOT report theoretical or highly speculative vulnerabilities without evidence.
-4. Security confidence: be conservative — use 0.9+ only for unambiguous vulnerabilities.
-5. Focus on: injection flaws, auth/session issues, sensitive data exposure,
-   insecure deserialization, broken access control, cryptographic weaknesses.
+Your PRIMARY role is to VALIDATE the pattern-matched findings already provided —
+not to scan the diff independently.  You may report an additional finding ONLY
+if you can quote the exact vulnerable code line AND describe a concrete exploit
+path with ≥ 0.95 certainty.
 
-Rate severity as:
-  CRITICAL: Direct exploitation possible, high impact (RCE, auth bypass, major data breach)
-  HIGH:     Significant risk, exploitable with some effort
-  MEDIUM:   Potential risk requiring specific conditions
-  LOW:      Defensive depth, informational security hardening
-"""
+VALIDATION RULES:
+1. For each provided pattern finding, decide: real issue or false positive?
+2. False positive signals: test/mock file, variable name (not actual value),
+   comment or docstring match, safe usage of a broad rule.
+3. Real issue signals: actual credential value hardcoded, direct SQL/cmd injection
+   data flow visible, attacker can trigger the code path.
+4. Evidence is mandatory — quote the exact vulnerable line for every finding.
+5. Use 0.9+ confidence only for unambiguous, directly exploitable vulnerabilities.
+
+Severity scale:
+  CRITICAL: Direct exploitation, high impact (RCE, auth bypass, mass data exposure)
+  HIGH:     Significant risk, exploitable with moderate effort
+  MEDIUM:   Risk requires specific conditions or privileges
+  LOW:      Defence-in-depth; informational hardening suggestion"""
 
 
 class SecurityScannerAgent(BaseAgent):
@@ -114,13 +120,40 @@ class SecurityScannerAgent(BaseAgent):
         self.log_info("Starting security scan for %s PR#%s",
                       context.repo_full_name, context.pr_number)
 
-        # Pass 1: Deterministic pattern matching
+        # Pass 1: Deterministic pattern matching (fast, no LLM)
         pattern_findings = self._run_pattern_scan(context)
-        self.log_info("Pattern scan found %d issues", len(pattern_findings))
+        self.log_info("Pattern scan found %d raw issues", len(pattern_findings))
 
-        # Pass 2: LLM semantic analysis
+        # Pass 2: LLM validates pattern findings (filter false positives)
+        # Convert AgentFindings to dicts, validate, convert back
+        if pattern_findings:
+            raw_dicts = [
+                {
+                    "title": f.title,
+                    "file": f.file_path or "",
+                    "line": f.line_start or 0,
+                    "severity": f.severity.value,
+                    "confidence": f.confidence,
+                    "description": f.description,
+                    "evidence": f.evidence or "",
+                    "category": f.category.value,
+                }
+                for f in pattern_findings
+            ]
+            validator = ToolValidator(
+                openai_client=self._client if settings.openai_api_key else None
+            )
+            validated_dicts = await validator.validate(raw_dicts, repo_path="")
+            validated_set = {(d["file"], d["line"], d["title"]) for d in validated_dicts}
+            pattern_findings = [
+                f for f in pattern_findings
+                if (f.file_path or "", f.line_start or 0, f.title) in validated_set
+            ]
+            self.log_info("Pattern findings after LLM validation: %d", len(pattern_findings))
+
+        # Pass 3: LLM semantic analysis for complex vulnerabilities missed by patterns
         llm_findings = await self._run_llm_scan(context)
-        self.log_info("LLM scan found %d issues", len(llm_findings))
+        self.log_info("LLM scan found %d additional issues", len(llm_findings))
 
         # Combine, deduplicate, filter
         all_findings = pattern_findings + llm_findings
@@ -238,16 +271,18 @@ class SecurityScannerAgent(BaseAgent):
         parts = [
             f"## Repository: {context.repo_full_name}",
             f"## PR #{context.pr_number}: {context.pr_title or 'Untitled'}",
-            "\n## Diff to Analyse\n```diff\n" + context.raw_diff + "\n```",
+            "\n## Diff (added lines only — your source of truth)\n```diff\n" + context.raw_diff + "\n```",
         ]
         if context.expanded_definitions:
             defs = "\n\n".join(
                 f"```\n{src}\n```" for src in list(context.expanded_definitions.values())[:5]
             )
-            parts.append(f"\n## Full Function Definitions\n{defs}")
+            parts.append(f"\n## Full Function Definitions (for data-flow tracing)\n{defs}")
         parts.append(
-            "\nAnalyse the above diff for security vulnerabilities. "
-            "Focus especially on data flow from user inputs to sinks (SQL, command, file, HTML)."
+            "\nReport ONLY vulnerabilities where you can quote the exact vulnerable "
+            "line from the diff above. Do NOT report issues from files not shown. "
+            "Focus on: injection sinks (SQL/cmd/HTML), hardcoded secrets with real values, "
+            "broken auth flows, and insecure deserialization with external data."
         )
         return "\n".join(parts)
 

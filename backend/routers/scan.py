@@ -23,6 +23,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 import backend.services.storage as storage
+from backend.agents.tool_validator import ToolValidator, deduplicate_findings
 from backend.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -153,11 +154,27 @@ async def run_audit_for_repo(repo_url: str, scan_path: str = "") -> dict | None:
             scan_root = tmpdir
 
         security_findings = await _run_bandit(scan_root)
+        ast_security = await _run_ast_security_scan(scan_root)
+        # Merge bandit + AST (AST first — higher precision)
+        security_findings = ast_security + [
+            f for f in security_findings
+            if not any(
+                abs((f.get("line") or 0) - (a.get("line") or 0)) < 3 and f.get("file") == a.get("file")
+                for a in ast_security
+            )
+        ]
         quality_findings = await _run_radon(scan_root)
         dep_findings = await _run_dep_audit(scan_root)
-        summary = await _llm_summarize(scan_label, security_findings, quality_findings, dep_findings, scan_root)
 
-        all_findings = security_findings + quality_findings + dep_findings
+        # ── LLM validation gate ────────────────────────────────────────────────
+        validator = _get_tool_validator()
+        security_findings = await validator.validate(security_findings, scan_root)
+        quality_findings  = await validator.validate(quality_findings,  scan_root)
+
+        # ── Deduplication ──────────────────────────────────────────────────────
+        all_findings = deduplicate_findings(security_findings + quality_findings + dep_findings)
+
+        summary = await _llm_summarize(scan_label, security_findings, quality_findings, dep_findings, scan_root)
         health_score, grade, sub_scores = _compute_health_score(all_findings)
 
         repo_id = _persist_scan_results(
@@ -237,35 +254,52 @@ async def _run_flash_audit(scan_id: str, repo_url: str, queue: asyncio.Queue, sc
             else:
                 await emit("Repository cloned. Running static analysis...")
 
-            # ── Step 2: Layer 1 — Static analysis tools ────────────────────────
+            # ── Step 2: Static analysis tools ─────────────────────────────────
             await emit("Security Scan Agent running (bandit + AST)...")
-            security_findings = await _run_bandit(scan_root)
-            ast_security = await _run_ast_security_scan(scan_root)
-            # Merge: AST findings first (higher precision), then bandit
-            security_findings = ast_security + [
-                f for f in security_findings
+            bandit_findings = await _run_bandit(scan_root)
+            ast_security    = await _run_ast_security_scan(scan_root)
+            # AST findings have higher precision — keep them; bandit fills the gaps
+            raw_security = ast_security + [
+                f for f in bandit_findings
                 if not any(
-                    abs((f.get("line") or 0) - (a.get("line") or 0)) < 3 and f.get("file") == a.get("file")
+                    abs((f.get("line") or 0) - (a.get("line") or 0)) < 3
+                    and f.get("file") == a.get("file")
                     for a in ast_security
                 )
             ]
-            await emit(f"Security scan complete — {len(security_findings)} issues found")
+            await emit(f"Security scan complete — {len(raw_security)} raw findings")
 
             await emit("Code Quality Agent running (radon + complexity)...")
-            quality_findings = await _run_radon(scan_root)
-            await emit(f"Code quality analysis complete — {len(quality_findings)} issues found")
+            raw_quality = await _run_radon(scan_root)
+            await emit(f"Code quality analysis complete — {len(raw_quality)} raw findings")
 
             await emit("Dependency Auditor running (OSV + registry)...")
             dep_findings = await _run_dep_audit(scan_root)
             await emit(f"Dependency audit complete — {len(dep_findings)} issues found")
 
-            # ── Step 3: Layer 2 — LLM reasoning ───────────────────────────────
+            # ── Step 3: LLM validation gate ────────────────────────────────────
+            await emit("AI validating findings (filtering false positives)...")
+            validator = _get_tool_validator()
+            security_findings = await validator.validate(raw_security, scan_root)
+            quality_findings  = await validator.validate(raw_quality,  scan_root)
+            fp_removed = (len(raw_security) - len(security_findings)) + (len(raw_quality) - len(quality_findings))
+            await emit(
+                f"Validation complete — {fp_removed} false positive(s) filtered, "
+                f"{len(security_findings) + len(quality_findings) + len(dep_findings)} confirmed findings"
+            )
+
+            # ── Step 4: Deduplication ──────────────────────────────────────────
+            all_findings = deduplicate_findings(security_findings + quality_findings + dep_findings)
+            dupes_merged = (len(security_findings) + len(quality_findings) + len(dep_findings)) - len(all_findings)
+            if dupes_merged:
+                await emit(f"Deduplication: merged {dupes_merged} overlapping finding(s)")
+
+            # ── Step 5: LLM summary ────────────────────────────────────────────
             await emit("AI Agent synthesizing findings...")
             summary = await _llm_summarize(scan_label, security_findings, quality_findings, dep_findings, scan_root)
             await emit("AI synthesis complete")
 
-            # ── Step 4: Health score ───────────────────────────────────────────
-            all_findings = security_findings + quality_findings + dep_findings
+            # ── Step 6: Health score ───────────────────────────────────────────
             health_score, grade, sub_scores = _compute_health_score(all_findings)
 
             # ── Step 5: Persist to storage so dashboard can display results ────
@@ -307,6 +341,21 @@ async def _run_flash_audit(scan_id: str, repo_url: str, queue: asyncio.Queue, sc
         logger.exception("Flash audit %s failed", scan_id)
         scan.update(status="error", error=str(e))
         await queue.put({"type": "error", "message": str(e)})
+
+
+# ── Tool validator factory ─────────────────────────────────────────────────────
+
+
+def _get_tool_validator() -> ToolValidator:
+    """Return a ToolValidator wired to the OpenAI client when available."""
+    if not settings.openai_api_key:
+        return ToolValidator(openai_client=None)
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=settings.openai_api_key)
+        return ToolValidator(openai_client=client)
+    except Exception:
+        return ToolValidator(openai_client=None)
 
 
 # ── Static analysis tool runners ───────────────────────────────────────────────
