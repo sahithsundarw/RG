@@ -287,7 +287,7 @@ async def _run_bandit(repo_path: str) -> list[dict]:
         findings = []
         for issue in data.get("results", [])[:30]:
             findings.append({
-                "category": "security",
+                "category": "SECURITY",
                 "severity": issue.get("issue_severity", "MEDIUM").upper(),
                 "title": issue.get("test_name", "Security issue").replace("_", " ").title(),
                 "file": issue.get("filename", "").replace(repo_path, "").lstrip("/\\"),
@@ -329,7 +329,7 @@ async def _run_radon(repo_path: str) -> list[dict]:
                     continue
                 cc = block.get("complexity", 0)
                 findings.append({
-                    "category": "quality",
+                    "category": "CODE_SMELL",
                     "severity": "HIGH" if rank in ("E", "F") else "MEDIUM",
                     "title": f"High complexity: {block.get('name', 'unknown')} (rank {rank}, CC={cc})",
                     "file": rel,
@@ -364,7 +364,7 @@ async def _run_dep_audit(repo_path: str) -> list[dict]:
         for vp in vulns[:20]:
             fix = f" Upgrade to {vp.fix_version}." if vp.fix_version else ""
             findings.append({
-                "category": "dependency",
+                "category": "DEPENDENCY",
                 "severity": vp.severity.value,
                 "title": f"Vulnerable: {vp.name}@{vp.installed_version}",
                 "file": "requirements.txt",
@@ -523,7 +523,7 @@ def _persist_scan_results(
             "file_path": f.get("file") or None,
             "line_start": f.get("line") or None,
             "line_end": None,
-            "category": f.get("category", "security"),
+            "category": f.get("category", "SECURITY"),
             "severity": sev_map.get(f.get("severity", "MEDIUM"), "MEDIUM"),
             "title": f.get("title", "Finding"),
             "description": f.get("description", ""),
@@ -543,7 +543,7 @@ def _persist_scan_results(
     # Compute sub-scores from findings
     sev_penalties = {"CRITICAL": 20, "HIGH": 10, "MEDIUM": 5, "LOW": 2, "INFO": 0}
     sub = {"code_quality": 100.0, "security": 100.0, "dependencies": 100.0, "documentation": 100.0, "test_coverage": 100.0}
-    cat_to_sub = {"security": "security", "dependency": "dependencies", "quality": "code_quality"}
+    cat_to_sub = {"SECURITY": "security", "DEPENDENCY": "dependencies", "CODE_SMELL": "code_quality", "BUG": "code_quality"}
     for f in findings:
         cat = f.get("category", "quality")
         sub_key = cat_to_sub.get(cat, "code_quality")
