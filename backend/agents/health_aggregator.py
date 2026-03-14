@@ -111,15 +111,17 @@ class HealthAggregatorAgent:
         latest = storage.get_latest_health_record(repo_id)
 
         if not latest:
+            # Repo exists but has never been scanned — return a placeholder with
+            # has_scan_data=False so the UI can show "waiting for first scan"
             return HealthDashboard(
                 repo_id=repo_id,
                 repo_full_name=repo["full_name"],
                 as_of=datetime.now(timezone.utc),
-                overall_score=100.0,
-                grade=HealthGrade.A,
+                overall_score=0.0,
+                grade=HealthGrade.F,
                 sub_scores=SubScores(
-                    code_quality=100, security=100, dependencies=100,
-                    documentation=100, test_coverage=100,
+                    code_quality=0, security=0, dependencies=0,
+                    documentation=0, test_coverage=0,
                 ),
                 active_findings={},
                 hot_zones=[],
@@ -127,6 +129,7 @@ class HealthAggregatorAgent:
                 trend_delta_7d=0.0,
                 trend_velocity="STABLE",
                 recent_activity=[],
+                has_scan_data=False,
             )
 
         # 30-day trend

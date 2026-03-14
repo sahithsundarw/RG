@@ -5,6 +5,9 @@
 // In dev: proxy via Vite (localhost:8000). In prod: same origin (empty string).
 const BASE_URL = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? "http://localhost:8000" : "");
 
+// Exported so other modules can compute backend-relative URLs (e.g. webhook endpoint).
+export const API_BASE_URL = BASE_URL;
+
 export interface HealthDashboard {
   repo_id: string;
   repo_full_name: string;
@@ -24,6 +27,8 @@ export interface HealthDashboard {
   trend_delta_7d: number;
   trend_velocity: "IMPROVING" | "STABLE" | "DEGRADING";
   recent_activity: ActivityItem[];
+  /** False when the repo has never been scanned; score values are placeholders */
+  has_scan_data?: boolean;
 }
 
 export interface HotZone {
@@ -58,6 +63,7 @@ export interface Repository {
   config?: {
     webhook_secret?: string;
     trigger_events?: { pull_requests: boolean; pushes: boolean; merges: boolean };
+    scan_path?: string;
   };
 }
 
@@ -157,6 +163,7 @@ export interface ScanResult {
 export interface MonitoringConfig {
   clone_url: string;
   webhook_secret: string;
+  scan_path: string;   // "" = entire repo; "backend" = only that sub-directory
   events: {
     pull_requests: boolean;
     pushes: boolean;
@@ -214,7 +221,11 @@ export const api = {
         name,
         clone_url: config.clone_url,
         default_branch: "main",
-        config: { webhook_secret: config.webhook_secret, trigger_events: config.events },
+        config: {
+          webhook_secret: config.webhook_secret,
+          trigger_events: config.events,
+          scan_path: config.scan_path || "",
+        },
       });
     },
   },

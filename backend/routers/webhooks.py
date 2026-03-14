@@ -136,10 +136,13 @@ async def _enqueue_event(event: WebhookEvent) -> None:
     import backend.services.storage as storage
     from backend.routers.events import broadcast
 
-    # Respect per-repo trigger_events config
+    # Respect per-repo trigger_events config; also read configured scan_path
     existing = storage.get_repo_by_full_name(event.repo_full_name)
+    scan_path = ""
     if existing:
-        triggers = existing.get("config", {}).get("trigger_events", {})
+        repo_config = existing.get("config", {})
+        triggers = repo_config.get("trigger_events", {})
+        scan_path = repo_config.get("scan_path", "")
         et = event.event_type.value
         if et in ("pr_open", "pr_update") and not triggers.get("pull_requests", True):
             logger.info("PR events disabled for %s — skipping", event.repo_full_name)
@@ -151,11 +154,26 @@ async def _enqueue_event(event: WebhookEvent) -> None:
             logger.info("Merge events disabled for %s — skipping", event.repo_full_name)
             return
 
+    # Immediately notify connected SSE clients that a webhook was received
+    # (scan may take minutes; this gives instant feedback in the dashboard)
+    repo_id_hint = existing["id"] if existing else None
+    await broadcast({
+        "type": "webhook_received",
+        "repo_full_name": event.repo_full_name,
+        "repo_id": repo_id_hint,
+        "event_type": event.event_type.value,
+    })
+    logger.info("SSE: broadcast webhook_received for %s (event=%s)", event.repo_full_name, event.event_type.value)
+
     try:
         redis = await get_redis()
         producer = EventQueueProducer(redis)
         await producer.publish(event)
-        logger.info("Event %s enqueued to Redis stream", event.event_id)
+        logger.info("Event %s enqueued to Redis stream (scan_path=%r)", event.event_id, scan_path)
+        # Note: when Redis is available the worker runs in a separate process and
+        # cannot reach the in-memory SSE subscribers.  The webhook_received event
+        # above is the only live signal in that case.  Use the fallback path for
+        # full live updates, or configure a Redis pub/sub bridge in the worker.
     except Exception as e:
         logger.warning(
             "Redis unavailable (%s) — running flash audit directly for %s",
@@ -164,7 +182,7 @@ async def _enqueue_event(event: WebhookEvent) -> None:
         from backend.routers.scan import run_audit_for_repo
         clone_url = event.repo_clone_url or f"https://github.com/{event.repo_full_name}.git"
         try:
-            result = await run_audit_for_repo(clone_url)
+            result = await run_audit_for_repo(clone_url, scan_path=scan_path)
             if result:
                 logger.info(
                     "Direct audit complete for %s — score=%s grade=%s findings=%s",
@@ -180,5 +198,21 @@ async def _enqueue_event(event: WebhookEvent) -> None:
                     "grade": result.get("grade"),
                     "total_findings": result.get("total_findings"),
                 })
+            else:
+                logger.warning("Direct audit returned no result for %s", event.repo_full_name)
+                await broadcast({
+                    "type": "webhook_failed",
+                    "repo_full_name": event.repo_full_name,
+                    "repo_id": repo_id_hint,
+                    "event_type": event.event_type.value,
+                    "reason": "audit_returned_no_result",
+                })
         except Exception as audit_err:
             logger.error("Direct audit failed for %s: %s", event.repo_full_name, audit_err)
+            await broadcast({
+                "type": "webhook_failed",
+                "repo_full_name": event.repo_full_name,
+                "repo_id": repo_id_hint,
+                "event_type": event.event_type.value,
+                "reason": str(audit_err)[:200],
+            })

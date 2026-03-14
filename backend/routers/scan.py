@@ -109,8 +109,13 @@ async def get_scan_result(scan_id: str) -> dict:
 # ── Public entry point for webhook-triggered audits ───────────────────────────
 
 
-async def run_audit_for_repo(repo_url: str) -> dict | None:
+async def run_audit_for_repo(repo_url: str, scan_path: str = "") -> dict | None:
     """Run a flash audit without SSE — called directly when Redis is unavailable.
+
+    Args:
+        repo_url:  The repository clone URL.
+        scan_path: Optional sub-directory to scope analysis (e.g. ``"backend"``).
+                   Empty string means the entire repository.
 
     Returns the result dict (with repo_id) or None on failure.
     """
@@ -121,7 +126,8 @@ async def run_audit_for_repo(repo_url: str) -> dict | None:
         logger.warning("[webhook_audit] Cannot parse URL %r: %s", repo_url, e)
         return None
 
-    logger.info("[webhook_audit] Starting direct flash audit for %s", repo_full_name)
+    scan_label = f"{repo_full_name}/{scan_path}" if scan_path else repo_full_name
+    logger.info("[webhook_audit] Starting direct flash audit for %s", scan_label)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         clone_url = f"https://github.com/{repo_full_name}.git"
@@ -140,10 +146,16 @@ async def run_audit_for_repo(repo_url: str) -> dict | None:
             logger.error("[webhook_audit] Clone failed for %s: %s", repo_full_name, stderr.decode()[:200])
             return None
 
-        security_findings = await _run_bandit(tmpdir)
-        quality_findings = await _run_radon(tmpdir)
-        dep_findings = await _run_dep_audit(tmpdir)
-        summary = await _llm_summarize(repo_full_name, security_findings, quality_findings, dep_findings)
+        # Resolve scan root — sub-directory when scan_path is provided
+        scan_root = str(Path(tmpdir) / scan_path) if scan_path else tmpdir
+        if scan_path and not Path(scan_root).is_dir():
+            logger.warning("[webhook_audit] scan_path %r not found in %s — falling back to repo root", scan_path, repo_full_name)
+            scan_root = tmpdir
+
+        security_findings = await _run_bandit(scan_root)
+        quality_findings = await _run_radon(scan_root)
+        dep_findings = await _run_dep_audit(scan_root)
+        summary = await _llm_summarize(scan_label, security_findings, quality_findings, dep_findings)
 
         all_findings = security_findings + quality_findings + dep_findings
         health_score, grade = _compute_health_score(all_findings)
@@ -155,11 +167,12 @@ async def run_audit_for_repo(repo_url: str) -> dict | None:
             grade=grade,
             findings=all_findings,
             summary=summary,
+            scan_path=scan_path,
         )
 
         logger.info(
             "[webhook_audit] Completed for %s — score=%d grade=%s findings=%d repo_id=%s",
-            repo_full_name, health_score, grade, len(all_findings), repo_id,
+            scan_label, health_score, grade, len(all_findings), repo_id,
         )
         return {"repo_id": repo_id, "health_score": health_score, "grade": grade, "total_findings": len(all_findings)}
 

@@ -339,6 +339,9 @@ class HealthDashboard(BaseModel):
 
     recent_activity: list[dict[str, Any]]
 
+    # False when the repository has never been scanned; score values are placeholders
+    has_scan_data: bool = True
+
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║                           API REQUEST / RESPONSE                           ║
