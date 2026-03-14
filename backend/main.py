@@ -112,25 +112,33 @@ app.include_router(scan_router)
 
 # ── Serve frontend static files ────────────────────────────────────────────────
 
-_frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
-if _frontend_dist.exists():
-    app.mount("/assets", StaticFiles(directory=str(_frontend_dist / "assets")), name="assets")
+FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+if FRONTEND_DIST.exists():
+    app.mount(
+        "/assets",
+        StaticFiles(directory=str(FRONTEND_DIST / "assets")),
+        name="assets",
+    )
 
     @app.get("/", include_in_schema=False)
-    async def serve_index():
-        return FileResponse(str(_frontend_dist / "index.html"))
+    def serve_index():
+        return FileResponse(str(FRONTEND_DIST / "index.html"))
 
     @app.get("/{full_path:path}", include_in_schema=False)
-    async def serve_spa(full_path: str):
-        # Let API routes pass through; serve index.html for everything else
-        file = _frontend_dist / full_path
+    def serve_spa(full_path: str):
+        # API routes are already handled above — this catches all SPA routes
+        if full_path.startswith(("api/", "webhooks/", "docs", "redoc", "health", "ping", "ready")):
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404)
+        file = FRONTEND_DIST / full_path
         if file.exists() and file.is_file():
             return FileResponse(str(file))
-        return FileResponse(str(_frontend_dist / "index.html"))
+        return FileResponse(str(FRONTEND_DIST / "index.html"))
 
 else:
     @app.get("/", include_in_schema=False)
-    async def root():
+    def root():
         return {
             "service": settings.app_name,
             "version": settings.app_version,

@@ -13,6 +13,7 @@ __pycache__/
 *.egg
 *.egg-info/
 dist/
+!frontend/dist/
 build/
 .eggs/
 .venv/
@@ -29,7 +30,6 @@ coverage.xml
 
 # ── Node / Frontend ────────────────────────────────────────────────────────────
 frontend/node_modules/
-frontend/dist/
 frontend/.vite/
 frontend/coverage/
 
