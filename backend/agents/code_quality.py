@@ -123,6 +123,9 @@ class CodeQualityAgent(BaseAgent):
         # Check test coverage — flag if source files changed but no test files present
         findings.extend(self._check_test_coverage(context))
 
+        # Check for missing error handling around risky calls
+        findings.extend(self._check_missing_error_handling(context))
+
         return findings
 
     def _check_deep_nesting(self, context: ContextPackage) -> list[AgentFinding]:
@@ -241,22 +244,99 @@ class CodeQualityAgent(BaseAgent):
 
     # ── Metrics ────────────────────────────────────────────────────────────────
 
-    def _compute_metrics(self, context: ContextPackage) -> QualityMetrics:
-        """Compute heuristic quality metrics from the diff."""
-        added = sum(len(h.added_lines) for h in context.diff_hunks)
-        removed = sum(len(h.removed_lines) for h in context.diff_hunks)
+    def _compute_cyclomatic_complexity(self, source: str) -> int:
+        """McCabe cyclomatic complexity via AST."""
+        import ast as ast_module
+        try:
+            tree = ast_module.parse(source)
+        except SyntaxError:
+            return 1
+        complexity = 1
+        for node in ast_module.walk(tree):
+            if isinstance(node, (ast_module.If, ast_module.While, ast_module.For,
+                                  ast_module.ExceptHandler, ast_module.With,
+                                  ast_module.Assert, ast_module.comprehension)):
+                complexity += 1
+            elif isinstance(node, ast_module.BoolOp):
+                complexity += len(node.values) - 1
+        return complexity
 
-        # Estimate cyclomatic complexity from added lines
-        complexity_keywords = re.compile(r"\b(if|elif|else|for|while|except|with|and|or)\b")
-        complexity_delta = sum(
-            len(complexity_keywords.findall(line))
-            for hunk in context.diff_hunks
-            for line in hunk.added_lines
-        )
+    def _check_missing_error_handling(self, context: ContextPackage) -> list[AgentFinding]:
+        """Flag risky calls (file I/O, network, DB) not wrapped in try/except."""
+        import ast as ast_module
+
+        RISKY_CALLS = {"open", "requests", "httpx", "urllib", "execute", "query",
+                       "subprocess", "os.system", "json.loads", "pickle"}
+        findings = []
+
+        for sym in context.changed_symbols:
+            if not sym.file_path or not sym.file_path.endswith(".py"):
+                continue
+            try:
+                tree = ast_module.parse(sym.full_source)
+            except SyntaxError:
+                continue
+
+            # Collect all try block nodes to check if calls are protected
+            try_nodes: list[ast_module.Try] = [
+                n for n in ast_module.walk(tree) if isinstance(n, ast_module.Try)
+            ]
+            protected_lines: set[int] = set()
+            for try_node in try_nodes:
+                for child in ast_module.walk(try_node):
+                    if hasattr(child, "lineno"):
+                        protected_lines.add(child.lineno)
+
+            for node in ast_module.walk(tree):
+                if not isinstance(node, ast_module.Call):
+                    continue
+                func_name = ""
+                if isinstance(node.func, ast_module.Name):
+                    func_name = node.func.id
+                elif isinstance(node.func, ast_module.Attribute):
+                    func_name = node.func.attr
+                if not any(r in func_name.lower() for r in RISKY_CALLS):
+                    continue
+                if node.lineno in protected_lines:
+                    continue
+                try:
+                    call_src = ast_module.unparse(node)[:100]
+                except Exception:
+                    call_src = func_name + "()"
+                findings.append(AgentFinding(
+                    agent_source=self.name,
+                    file_path=sym.file_path,
+                    line_start=node.lineno,
+                    category=FindingCategory.CODE_SMELL,
+                    severity=Severity.MEDIUM,
+                    title=f"Unhandled exception risk: {func_name}()",
+                    description=(
+                        f"`{func_name}()` in `{sym.name}` can raise exceptions but is not "
+                        f"wrapped in a try/except block. This may cause unhandled crashes."
+                    ),
+                    evidence=call_src,
+                    suggested_fix=(
+                        f"try:\n    {call_src}\nexcept Exception as e:\n"
+                        f"    logger.error('{{e}}')\n    raise"
+                    ),
+                    reasoning="Risky I/O or network call without exception handling.",
+                    confidence=0.72,
+                ))
+        return findings[:5]  # cap to avoid noise
+
+    def _compute_metrics(self, context: ContextPackage) -> QualityMetrics:
+        """Compute quality metrics using AST cyclomatic complexity."""
+        cc_values = []
+        for sym in context.changed_symbols:
+            if sym.file_path and sym.file_path.endswith(".py"):
+                cc = self._compute_cyclomatic_complexity(sym.full_source)
+                cc_values.append(cc)
+
+        cc_after = round(sum(cc_values) / len(cc_values), 1) if cc_values else None
 
         return QualityMetrics(
             cyclomatic_complexity_before=None,
-            cyclomatic_complexity_after=None,
+            cyclomatic_complexity_after=cc_after,
             cognitive_complexity_before=None,
             cognitive_complexity_after=None,
             duplication_percentage=None,

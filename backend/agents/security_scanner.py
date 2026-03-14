@@ -43,14 +43,28 @@ _SECRET_PATTERNS = [
     (re.compile(r"AKIA[0-9A-Z]{16}"), "AWS access key ID", "CWE-798"),
     (re.compile(r"(?i)-----BEGIN (RSA |EC |DSA )?PRIVATE KEY-----"), "Private key block", "CWE-321"),
     (re.compile(r"ghp_[a-zA-Z0-9]{36}"), "GitHub personal access token", "CWE-798"),
+    (re.compile(r"(?i)(jwt_secret|jwt_key|signing_key|secret_key)\s*=\s*['\"][^'\"]{4,}['\"]"), "Hardcoded JWT/signing secret", "CWE-798"),
+    (re.compile(r"(?i)sk-[a-zA-Z0-9]{32,}"), "Hardcoded OpenAI API key", "CWE-798"),
+    (re.compile(r"(?i)(db_password|database_password|mysql_password|postgres_password)\s*=\s*['\"][^'\"]{2,}['\"]"), "Hardcoded database password", "CWE-798"),
 ]
 
 _INJECTION_PATTERNS = [
-    (re.compile(r"(?i)(execute|query|cursor\.execute)\s*\(\s*f?['\"].*%[s|d].*['\"]|f?['\"].*\{.*\}.*['\"]"), "Potential SQL injection", "CWE-89"),
-    (re.compile(r"(?i)subprocess\.(run|call|Popen)\s*\(.*shell\s*=\s*True"), "Shell injection via shell=True", "CWE-78"),
-    (re.compile(r"(?i)eval\s*\(.*input|eval\s*\(.*request|eval\s*\(.*params"), "Unsafe eval() with user input", "CWE-94"),
-    (re.compile(r"(?i)os\.system\s*\(.*request|os\.system\s*\(.*input|os\.system\s*\(.*param"), "Command injection via os.system", "CWE-78"),
-    (re.compile(r"(?i)pickle\.loads?\s*\(.*request|pickle\.loads?\s*\(.*data"), "Unsafe deserialization (pickle)", "CWE-502"),
+    # SQL: string concatenation or %-format in query calls (not f-strings — those caught by AST)
+    (re.compile(r"(?i)(execute|query|cursor\.execute)\s*\(\s*['\"][^'\"]*\"\s*(%|format\s*\(|\+\s*\w)"), "SQL injection via string formatting", "CWE-89"),
+    # SQL: direct string concatenation with + operator
+    (re.compile(r"(?i)(execute|query)\s*\(\s*[\"'][^\"']*[\"']\s*\+"), "SQL injection via string concatenation", "CWE-89"),
+    # Shell injection: shell=True with variable (not string literal)
+    (re.compile(r"(?i)subprocess\.(run|call|Popen)\s*\([^)]*shell\s*=\s*True"), "Shell injection risk: subprocess shell=True", "CWE-78"),
+    # eval/exec with obvious user input sources
+    (re.compile(r"(?i)eval\s*\(\s*(request\.|input\(|os\.environ|sys\.argv|params\[|data\[)"), "Unsafe eval() with user-controlled input", "CWE-94"),
+    # os.system with variable arguments
+    (re.compile(r"(?i)os\.system\s*\(\s*(?!(['\"])[^\1]*\1\s*\))"), "Command injection via os.system with variable", "CWE-78"),
+    # Pickle deserialization of request/network data
+    (re.compile(r"(?i)pickle\.loads?\s*\(\s*(request\.|data\b|body\b|payload\b|recv\()"), "Unsafe pickle deserialization of external data", "CWE-502"),
+    # YAML unsafe load
+    (re.compile(r"(?i)yaml\.load\s*\([^,)]+\)(?!\s*,\s*Loader)"), "Unsafe YAML load (use yaml.safe_load)", "CWE-502"),
+    # XML external entity (XXE)
+    (re.compile(r"(?i)etree\.(parse|fromstring)\s*\("), "Potential XXE via XML parsing without defusedxml", "CWE-611"),
 ]
 
 _CRYPTO_PATTERNS = [
@@ -296,7 +310,7 @@ _CWE_TO_SEVERITY: dict[str, Severity] = {
     "CWE-89":  Severity.HIGH,     "CWE-78":  Severity.CRITICAL,
     "CWE-94":  Severity.HIGH,     "CWE-502": Severity.HIGH,
     "CWE-327": Severity.MEDIUM,   "CWE-338": Severity.MEDIUM,
-    "CWE-22":  Severity.HIGH,
+    "CWE-22":  Severity.HIGH,     "CWE-611": Severity.HIGH,
 }
 
 _CWE_TO_OWASP: dict[str, str] = {
@@ -309,6 +323,7 @@ _CWE_TO_OWASP: dict[str, str] = {
     "CWE-327": "A02:2021 - Cryptographic Failures",
     "CWE-338": "A02:2021 - Cryptographic Failures",
     "CWE-22":  "A01:2021 - Broken Access Control",
+    "CWE-611": "A05:2021 - Security Misconfiguration",
 }
 
 _CWE_TO_FIX: dict[str, str] = {
@@ -321,6 +336,7 @@ _CWE_TO_FIX: dict[str, str] = {
     "CWE-327": "Use SHA-256 or stronger for hashing. Use AES-GCM for encryption.",
     "CWE-338": "Use secrets.token_hex() or os.urandom() for cryptographic randomness.",
     "CWE-22":  "Validate and normalise file paths. Use os.path.realpath() and verify the resolved path is within the allowed directory.",
+    "CWE-611": "Use defusedxml instead of xml.etree.ElementTree to prevent XXE attacks.",
 }
 
 

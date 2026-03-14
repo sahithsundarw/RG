@@ -138,17 +138,39 @@ class PRReviewAgent(BaseAgent):
             f"## Pull Request: {context.pr_title or 'Untitled'}",
             f"**Repository:** {context.repo_full_name}",
             f"**Author:** {context.pr_author or 'unknown'}",
+            f"**Files changed:** {', '.join(context.changed_files[:8])}",
         ]
 
         if context.pr_description:
             sections.append(f"\n**Description:**\n{context.pr_description[:500]}")
 
-        sections.append("\n## Diff\n```diff\n" + context.raw_diff + "\n```")
+        # Add line numbers to diff so LLM can reference exact lines
+        diff_lines = context.raw_diff.split("\n")
+        numbered = []
+        line_num = 0
+        for line in diff_lines:
+            if line.startswith("@@"):
+                # Parse hunk header to get starting line number
+                import re as _re
+                m = _re.search(r"\+(\d+)", line)
+                if m:
+                    line_num = int(m.group(1)) - 1
+                numbered.append(line)
+            elif line.startswith("+") and not line.startswith("+++"):
+                line_num += 1
+                numbered.append(f"{line_num:4d} | {line}")
+            elif line.startswith("-") and not line.startswith("---"):
+                numbered.append(f"     | {line}")
+            else:
+                if not line.startswith(("+++", "---")):
+                    line_num += 1
+                numbered.append(line)
+        sections.append("\n## Diff (line numbers on added lines)\n```diff\n" + "\n".join(numbered) + "\n```")
 
         if context.expanded_definitions:
             defs_text = "\n\n".join(
                 f"### {name}\n```\n{src}\n```"
-                for name, src in list(context.expanded_definitions.items())[:10]
+                for name, src in list(context.expanded_definitions.items())[:8]
             )
             sections.append(f"\n## Full Symbol Definitions (for context)\n{defs_text}")
 
@@ -159,21 +181,40 @@ class PRReviewAgent(BaseAgent):
                 if callers
             )
             if callers_text:
-                sections.append(f"\n## Call Context\n{callers_text}")
+                sections.append(f"\n## Call Context (who calls the changed functions)\n{callers_text}")
 
         if context.relevant_test_files:
             test_texts = "\n\n".join(
-                f"### {tf.path}\n```\n{tf.content[:1000]}\n```"
+                f"### {tf.path}\n```\n{tf.content[:1500]}\n```"
                 for tf in context.relevant_test_files[:2]
             )
-            sections.append(f"\n## Related Tests\n{test_texts}")
+            sections.append(f"\n## Existing Tests (check for gaps)\n{test_texts}")
 
         if context.semantic_neighbors:
             neighbors_text = "\n\n".join(
-                f"### Similar code in {n.file_path}:{n.start_line} (similarity={n.similarity_score})\n```\n{n.source[:500]}\n```"
-                for n in context.semantic_neighbors[:3]
+                f"### Similar code: {n.file_path}:{n.start_line} (similarity {n.similarity_score:.2f})\n```\n{n.source[:400]}\n```"
+                for n in context.semantic_neighbors[:2]
             )
-            sections.append(f"\n## Semantically Similar Code (for comparison)\n{neighbors_text}")
+            sections.append(f"\n## Similar Code Patterns (duplication check)\n{neighbors_text}")
+
+        sections.append("""
+## Analysis Instructions
+
+Analyse the diff for these issue types (check ALL of them):
+1. **BUG**: Logic errors, null/undefined access, off-by-one, race conditions, wrong operator
+2. **PERFORMANCE**: N+1 queries, loops inside loops, unnecessary re-computation, missing memoisation
+3. **SECURITY**: Unvalidated input, injection risks, auth bypass, insecure defaults
+4. **CODE_SMELL**: Functions >40 lines, duplicate blocks (>5 lines), deep nesting (>4 levels)
+5. **TEST_GAP**: New code paths with no corresponding test
+
+For each finding you MUST provide:
+- The EXACT line number from the numbered diff above
+- A quoted code snippet (evidence field)
+- A concrete fix with working code
+- Honest confidence (0.9+ only for unambiguous issues)
+
+Do NOT flag: import ordering, minor naming preferences, or issues you cannot see in the diff.
+""")
 
         return "\n".join(sections)
 

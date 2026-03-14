@@ -155,7 +155,7 @@ async def run_audit_for_repo(repo_url: str, scan_path: str = "") -> dict | None:
         security_findings = await _run_bandit(scan_root)
         quality_findings = await _run_radon(scan_root)
         dep_findings = await _run_dep_audit(scan_root)
-        summary = await _llm_summarize(scan_label, security_findings, quality_findings, dep_findings)
+        summary = await _llm_summarize(scan_label, security_findings, quality_findings, dep_findings, scan_root)
 
         all_findings = security_findings + quality_findings + dep_findings
         health_score, grade = _compute_health_score(all_findings)
@@ -237,21 +237,30 @@ async def _run_flash_audit(scan_id: str, repo_url: str, queue: asyncio.Queue, sc
                 await emit("Repository cloned. Running static analysis...")
 
             # ── Step 2: Layer 1 — Static analysis tools ────────────────────────
-            await emit("Security Scan Agent running (bandit)...")
+            await emit("Security Scan Agent running (bandit + AST)...")
             security_findings = await _run_bandit(scan_root)
+            ast_security = await _run_ast_security_scan(scan_root)
+            # Merge: AST findings first (higher precision), then bandit
+            security_findings = ast_security + [
+                f for f in security_findings
+                if not any(
+                    abs((f.get("line") or 0) - (a.get("line") or 0)) < 3 and f.get("file") == a.get("file")
+                    for a in ast_security
+                )
+            ]
             await emit(f"Security scan complete — {len(security_findings)} issues found")
 
-            await emit("Code Quality Agent running (radon)...")
+            await emit("Code Quality Agent running (radon + complexity)...")
             quality_findings = await _run_radon(scan_root)
             await emit(f"Code quality analysis complete — {len(quality_findings)} issues found")
 
-            await emit("Dependency Auditor running (OSV)...")
+            await emit("Dependency Auditor running (OSV + registry)...")
             dep_findings = await _run_dep_audit(scan_root)
-            await emit(f"Dependency audit complete — {len(dep_findings)} vulnerabilities found")
+            await emit(f"Dependency audit complete — {len(dep_findings)} issues found")
 
             # ── Step 3: Layer 2 — LLM reasoning ───────────────────────────────
-            await emit("Synthesizing findings with AI...")
-            summary = await _llm_summarize(scan_label, security_findings, quality_findings, dep_findings)
+            await emit("AI Agent synthesizing findings...")
+            summary = await _llm_summarize(scan_label, security_findings, quality_findings, dep_findings, scan_root)
             await emit("AI synthesis complete")
 
             # ── Step 4: Health score ───────────────────────────────────────────
@@ -338,6 +347,123 @@ async def _run_bandit(repo_path: str) -> list[dict]:
         return []
 
 
+async def _run_ast_security_scan(repo_path: str) -> list[dict]:
+    """AST-based Python security analysis — catches issues bandit may miss."""
+    import ast as ast_module
+    findings = []
+    repo = Path(repo_path)
+
+    # Find Python files (skip venv/node_modules)
+    py_files = [
+        p for p in repo.rglob("*.py")
+        if not any(skip in str(p) for skip in ("venv", ".venv", "node_modules", ".git", "__pycache__", "dist"))
+    ][:40]  # Cap at 40 files
+
+    for py_file in py_files:
+        try:
+            source = py_file.read_text(errors="ignore")
+            tree = ast_module.parse(source, filename=str(py_file))
+        except SyntaxError:
+            continue
+
+        rel_path = str(py_file).replace(repo_path, "").lstrip("/\\")
+
+        for node in ast_module.walk(tree):
+            # Detect f-string SQL injection: cursor.execute(f"...{var}...")
+            if isinstance(node, ast_module.Call):
+                func_name = _ast_func_name(node)
+                if func_name and any(x in func_name.lower() for x in ("execute", "query", "raw")):
+                    if node.args and isinstance(node.args[0], ast_module.JoinedStr):
+                        findings.append({
+                            "category": "SECURITY",
+                            "severity": "CRITICAL",
+                            "title": "SQL injection via f-string",
+                            "file": rel_path,
+                            "line": node.lineno,
+                            "description": "Database query built with an f-string containing variables — attacker-controlled input can manipulate the query.",
+                            "evidence": ast_module.unparse(node)[:200],
+                            "suggested_fix": "Use parameterized queries: cursor.execute('SELECT * FROM t WHERE id = %s', (user_id,))",
+                            "cwe": "CWE-89",
+                            "confidence": "HIGH",
+                        })
+
+                # Detect subprocess with shell=True and variable input
+                if func_name and "subprocess" in func_name:
+                    keywords = {kw.arg: kw for kw in node.keywords}
+                    shell_kw = keywords.get("shell")
+                    if shell_kw and isinstance(shell_kw.value, ast_module.Constant) and shell_kw.value.value is True:
+                        # Check if first arg is not a plain string literal
+                        if node.args and not isinstance(node.args[0], ast_module.Constant):
+                            findings.append({
+                                "category": "SECURITY",
+                                "severity": "HIGH",
+                                "title": "Command injection via subprocess shell=True",
+                                "file": rel_path,
+                                "line": node.lineno,
+                                "description": "subprocess called with shell=True and a non-literal command string. An attacker may inject shell commands.",
+                                "evidence": ast_module.unparse(node)[:200],
+                                "suggested_fix": "Pass command as a list (no shell=True): subprocess.run(['cmd', arg1, arg2])",
+                                "cwe": "CWE-78",
+                                "confidence": "HIGH",
+                            })
+
+                # Detect eval/exec with any non-constant argument
+                if isinstance(node.func, ast_module.Name) and node.func.id in ("eval", "exec"):
+                    if node.args and not isinstance(node.args[0], ast_module.Constant):
+                        findings.append({
+                            "category": "SECURITY",
+                            "severity": "CRITICAL",
+                            "title": f"Arbitrary code execution via {node.func.id}()",
+                            "file": rel_path,
+                            "line": node.lineno,
+                            "description": f"{node.func.id}() called with a non-literal argument allows arbitrary code execution.",
+                            "evidence": ast_module.unparse(node)[:200],
+                            "suggested_fix": "Use ast.literal_eval() for safe value parsing, or refactor to avoid eval entirely.",
+                            "cwe": "CWE-94",
+                            "confidence": "HIGH",
+                        })
+
+            # Detect assert used for security checks (stripped in -O mode)
+            if isinstance(node, ast_module.Assert):
+                src_line = source.splitlines()[node.lineno - 1].strip() if node.lineno <= len(source.splitlines()) else ""
+                if any(x in src_line.lower() for x in ("auth", "permission", "admin", "role", "login")):
+                    findings.append({
+                        "category": "SECURITY",
+                        "severity": "HIGH",
+                        "title": "Security check via assert (disabled in optimised mode)",
+                        "file": rel_path,
+                        "line": node.lineno,
+                        "description": "assert statements are removed when Python runs with -O flag. Do not use assert for security checks.",
+                        "evidence": src_line[:150],
+                        "suggested_fix": "Replace with an explicit if/raise: if not condition: raise PermissionError(...)",
+                        "cwe": "CWE-617",
+                        "confidence": "HIGH",
+                    })
+
+    return findings[:25]
+
+
+def _ast_func_name(node) -> str | None:
+    """Extract string name from an AST Call node's func attribute."""
+    import ast as ast_module
+    func = node.func
+    if isinstance(func, ast_module.Name):
+        return func.id
+    elif isinstance(func, ast_module.Attribute):
+        base = _ast_func_name_simple(func.value)
+        return f"{base}.{func.attr}" if base else func.attr
+    return None
+
+
+def _ast_func_name_simple(node) -> str | None:
+    import ast as ast_module
+    if isinstance(node, ast_module.Name):
+        return node.id
+    elif isinstance(node, ast_module.Attribute):
+        return node.attr
+    return None
+
+
 async def _run_radon(repo_path: str) -> list[dict]:
     """Layer 1 quality: run radon cyclomatic complexity on Python files."""
     try:
@@ -381,30 +507,76 @@ async def _run_radon(repo_path: str) -> list[dict]:
 
 
 async def _run_dep_audit(repo_path: str) -> list[dict]:
-    """Layer 1 dependencies: check requirements.txt against OSV API."""
-    req_file = Path(repo_path) / "requirements.txt"
-    if not req_file.exists():
-        return []
+    """Layer 1 dependencies: check all package manifests against OSV API."""
+    _MANIFEST_PARSERS = {
+        "requirements.txt":     ("PyPI",      "_parse_requirements_txt"),
+        "requirements-dev.txt": ("PyPI",      "_parse_requirements_txt"),
+        "pyproject.toml":       ("PyPI",      "_parse_pyproject_toml"),
+        "Pipfile":              ("PyPI",      "_parse_requirements_txt"),
+        "package.json":         ("npm",       "_parse_package_json"),
+        "go.mod":               ("Go",        "_parse_go_mod"),
+        "Cargo.toml":           ("crates.io", "_parse_cargo_toml"),
+    }
     try:
         from backend.agents.dependency_auditor import DependencyAuditorAgent
         agent = DependencyAuditorAgent()
-        content = req_file.read_text(errors="ignore")
-        packages = agent._parse_requirements_txt(content, "PyPI")
-        vulns = await agent._query_osv_batch(packages)
-        findings = []
-        for vp in vulns[:20]:
-            fix = f" Upgrade to {vp.fix_version}." if vp.fix_version else ""
-            findings.append({
-                "category": "DEPENDENCY",
-                "severity": vp.severity.value,
-                "title": f"Vulnerable: {vp.name}@{vp.installed_version}",
-                "file": "requirements.txt",
-                "line": 0,
-                "description": f"{vp.name} {vp.installed_version} — {vp.cve_id}.{fix}",
-                "cve": vp.cve_id,
-                "suggested_fix": f"Upgrade {vp.name} to {vp.fix_version or 'latest non-vulnerable version'}.",
-            })
-        return findings
+        all_findings: list[dict] = []
+        seen_packages: set[str] = set()
+
+        for filename, (ecosystem, parser_method) in _MANIFEST_PARSERS.items():
+            manifest = Path(repo_path) / filename
+            if not manifest.exists():
+                continue
+            content = manifest.read_text(errors="ignore")
+            parse_fn = getattr(agent, parser_method)
+            packages = parse_fn(content, ecosystem)
+            vulns = await agent._query_osv_batch(packages)
+            outdated, license_issues = await agent._check_registry_metadata(packages)
+
+            for vp in vulns[:15]:
+                key = f"{vp.name}@{vp.installed_version}"
+                if key in seen_packages:
+                    continue
+                seen_packages.add(key)
+                fix = f" Upgrade to {vp.fix_version}." if vp.fix_version else ""
+                all_findings.append({
+                    "category": "DEPENDENCY",
+                    "severity": vp.severity.value,
+                    "title": f"Vulnerable: {vp.name}@{vp.installed_version}",
+                    "file": filename,
+                    "line": 0,
+                    "description": f"{vp.name} {vp.installed_version} has known vulnerability {vp.cve_id}.{fix}",
+                    "cve": vp.cve_id,
+                    "suggested_fix": f"Upgrade {vp.name} to {vp.fix_version or 'latest non-vulnerable version'}.",
+                })
+
+            for pkg in outdated[:5]:
+                key = f"{pkg['name']}@{pkg['installed_version']}-outdated"
+                if key in seen_packages:
+                    continue
+                seen_packages.add(key)
+                all_findings.append({
+                    "category": "DEPENDENCY",
+                    "severity": "LOW",
+                    "title": f"Outdated: {pkg['name']} ({pkg['installed_version']} → {pkg['latest_version']})",
+                    "file": filename,
+                    "line": 0,
+                    "description": f"{pkg['name']} is behind: {pkg['installed_version']} installed, {pkg['latest_version']} available.",
+                    "suggested_fix": f"Run: pip install --upgrade {pkg['name']} (or npm update {pkg['name']})",
+                })
+
+            for pkg in license_issues[:3]:
+                all_findings.append({
+                    "category": "DEPENDENCY",
+                    "severity": "MEDIUM",
+                    "title": f"Copyleft license: {pkg['name']} ({pkg['license']})",
+                    "file": filename,
+                    "line": 0,
+                    "description": f"{pkg['name']} uses {pkg['license']} which may require open-sourcing your code.",
+                    "suggested_fix": f"Review {pkg['license']} compatibility. Consider an MIT/Apache alternative.",
+                })
+
+        return all_findings[:30]
     except Exception as e:
         logger.debug("Dep audit failed: %s", e)
         return []
@@ -418,33 +590,55 @@ async def _llm_summarize(
     security: list[dict],
     quality: list[dict],
     deps: list[dict],
+    repo_path: str = "",
 ) -> str:
-    """Layer 2: LLM generates an executive summary from static analysis signals."""
+    """Layer 2: LLM generates an actionable summary with code evidence."""
+    total = len(security) + len(quality) + len(deps)
     if not settings.openai_api_key:
-        total = len(security) + len(quality) + len(deps)
+        sev_counts: dict[str, int] = {}
+        for f in security + quality + deps:
+            sev_counts[f.get("severity", "MEDIUM")] = sev_counts.get(f.get("severity", "MEDIUM"), 0) + 1
+        parts = [f"{v} {k}" for k, v in sorted(sev_counts.items())]
         return (
-            f"Found {len(security)} security issues, {len(quality)} quality issues, "
-            f"and {len(deps)} dependency vulnerabilities ({total} total)."
+            f"Found {total} issues: {', '.join(parts)}. "
+            f"Top concern: {(security + quality + deps)[0]['title'] if (security + quality + deps) else 'none'}."
         )
 
-    sec_lines = "\n".join(
-        f"- [{f['severity']}] {f['title']} ({f['file']}:{f['line']})" for f in security[:10]
-    ) or "None detected."
-    qual_lines = "\n".join(
-        f"- [{f['severity']}] {f['title']} ({f['file']}:{f['line']})" for f in quality[:10]
-    ) or "None detected."
-    dep_lines = "\n".join(
-        f"- [{f['severity']}] {f['title']}" for f in deps[:10]
-    ) or "None detected."
+    # Build rich prompt with code evidence for top findings
+    def _finding_block(f: dict, idx: int) -> str:
+        lines = [f"{idx}. [{f['severity']}] {f['title']}"]
+        if f.get("file"):
+            lines.append(f"   File: {f['file']}:{f.get('line', 0)}")
+        if f.get("description"):
+            lines.append(f"   Issue: {f['description'][:200]}")
+        if f.get("evidence"):
+            lines.append(f"   Code: {f['evidence'][:150]}")
+        if f.get("suggested_fix"):
+            lines.append(f"   Fix: {f['suggested_fix'][:150]}")
+        return "\n".join(lines)
 
-    prompt = (
-        f"Repository: {repo_full_name}\n\n"
-        f"SECURITY FINDINGS:\n{sec_lines}\n\n"
-        f"CODE QUALITY FINDINGS:\n{qual_lines}\n\n"
-        f"DEPENDENCY VULNERABILITIES:\n{dep_lines}\n\n"
-        "Write a concise 3-5 sentence executive summary highlighting the most critical issues "
-        "and top 2-3 actionable recommendations. Be direct and specific."
+    # Prioritise: CRITICAL > HIGH > MEDIUM, take top 8 total
+    all_findings = sorted(
+        security + quality + deps,
+        key=lambda f: {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}.get(f.get("severity", "MEDIUM"), 2)
     )
+    top_findings = all_findings[:8]
+
+    findings_text = "\n\n".join(_finding_block(f, i + 1) for i, f in enumerate(top_findings))
+
+    prompt = f"""Repository: {repo_full_name}
+Total issues found: {total} ({len(security)} security, {len(quality)} code quality, {len(deps)} dependency)
+
+TOP FINDINGS WITH CODE EVIDENCE:
+{findings_text}
+
+Based on these specific findings with code evidence, write a 4-6 sentence technical summary that:
+1. Names the most critical specific vulnerability found (with file/line if available)
+2. Identifies the primary code quality concern with the affected function
+3. Lists the most urgent dependency to upgrade (with CVE if available)
+4. Gives 2-3 concrete, actionable steps the developer should take first
+
+Be direct and technical. Reference specific files, function names, and CVE IDs from the findings above."""
 
     try:
         from openai import OpenAI
@@ -455,16 +649,17 @@ async def _llm_summarize(
             lambda: client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=350,
+                max_tokens=500,
             ),
         )
         return response.choices[0].message.content or ""
     except Exception as e:
         logger.warning("LLM summary failed: %s", e)
-        total = len(security) + len(quality) + len(deps)
+        top = all_findings[0] if all_findings else None
         return (
-            f"Detected {len(security)} security issues, {len(quality)} quality issues, "
-            f"and {len(deps)} vulnerable dependencies across {repo_full_name}."
+            f"Found {total} issues across {repo_full_name}. "
+            + (f"Most critical: {top['title']} in {top.get('file', 'unknown')}. " if top else "")
+            + f"{len(security)} security, {len(quality)} quality, {len(deps)} dependency issues."
         )
 
 
