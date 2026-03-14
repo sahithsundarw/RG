@@ -33,8 +33,12 @@ def verify_github_signature(payload_bytes: bytes, signature_header: str) -> bool
     Verify the X-Hub-Signature-256 header sent by GitHub.
 
     Returns True if the signature is valid, False otherwise.
-    Always use a constant-time comparison to prevent timing attacks.
+    If no webhook secret is configured, signature verification is skipped (dev mode).
     """
+    if not settings.github_webhook_secret:
+        logger.debug("No webhook secret configured — skipping signature verification")
+        return True
+
     if not signature_header or not signature_header.startswith("sha256="):
         return False
 

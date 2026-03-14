@@ -22,6 +22,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+import backend.services.storage as storage
 from backend.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -94,6 +95,64 @@ async def get_scan_result(scan_id: str) -> dict:
     if scan["error"]:
         return {"status": "error", "error": scan["error"]}
     return {"status": "complete", "result": scan["result"]}
+
+
+# ── Public entry point for webhook-triggered audits ───────────────────────────
+
+
+async def run_audit_for_repo(repo_url: str) -> dict | None:
+    """Run a flash audit without SSE — called directly when Redis is unavailable.
+
+    Returns the result dict (with repo_id) or None on failure.
+    """
+    try:
+        owner_name = _parse_github_url(repo_url)  # raises if unparseable
+        repo_full_name = f"{owner_name[0]}/{owner_name[1]}"
+    except ValueError as e:
+        logger.warning("[webhook_audit] Cannot parse URL %r: %s", repo_url, e)
+        return None
+
+    logger.info("[webhook_audit] Starting direct flash audit for %s", repo_full_name)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        clone_url = f"https://github.com/{repo_full_name}.git"
+        proc = await asyncio.create_subprocess_exec(
+            "git", "clone", "--depth", "1", clone_url, tmpdir,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+        except asyncio.TimeoutError:
+            logger.error("[webhook_audit] Clone timed out for %s", repo_full_name)
+            return None
+
+        if proc.returncode != 0:
+            logger.error("[webhook_audit] Clone failed for %s: %s", repo_full_name, stderr.decode()[:200])
+            return None
+
+        security_findings = await _run_bandit(tmpdir)
+        quality_findings = await _run_radon(tmpdir)
+        dep_findings = await _run_dep_audit(tmpdir)
+        summary = await _llm_summarize(repo_full_name, security_findings, quality_findings, dep_findings)
+
+        all_findings = security_findings + quality_findings + dep_findings
+        health_score, grade = _compute_health_score(all_findings)
+
+        repo_id = _persist_scan_results(
+            repo_full_name=repo_full_name,
+            clone_url=repo_url,
+            health_score=health_score,
+            grade=grade,
+            findings=all_findings,
+            summary=summary,
+        )
+
+        logger.info(
+            "[webhook_audit] Completed for %s — score=%d grade=%s findings=%d repo_id=%s",
+            repo_full_name, health_score, grade, len(all_findings), repo_id,
+        )
+        return {"repo_id": repo_id, "health_score": health_score, "grade": grade, "total_findings": len(all_findings)}
 
 
 # ── Flash Audit Pipeline ───────────────────────────────────────────────────────
@@ -170,8 +229,19 @@ async def _run_flash_audit(scan_id: str, repo_url: str, queue: asyncio.Queue) ->
             all_findings = security_findings + quality_findings + dep_findings
             health_score, grade = _compute_health_score(all_findings)
 
+            # ── Step 5: Persist to storage so dashboard can display results ────
+            repo_id = _persist_scan_results(
+                repo_full_name=repo_full_name,
+                clone_url=repo_url,
+                health_score=health_score,
+                grade=grade,
+                findings=all_findings,
+                summary=summary,
+            )
+
             result = {
                 "repo": repo_full_name,
+                "repo_id": repo_id,
                 "health_score": health_score,
                 "grade": grade,
                 "summary": summary,
@@ -188,7 +258,7 @@ async def _run_flash_audit(scan_id: str, repo_url: str, queue: asyncio.Queue) ->
             await emit(
                 "Flash audit complete!",
                 "done",
-                {"health_score": health_score, "grade": grade, "total_findings": len(all_findings)},
+                {"health_score": health_score, "grade": grade, "total_findings": len(all_findings), "repo_id": repo_id},
             )
 
     except Exception as e:
@@ -390,3 +460,126 @@ def _compute_health_score(findings: list[dict]) -> tuple[int, str]:
         grade = "F"
 
     return score, grade
+
+
+# ── Persist scan results to storage ───────────────────────────────────────────
+
+
+def _persist_scan_results(
+    repo_full_name: str,
+    clone_url: str,
+    health_score: int,
+    grade: str,
+    findings: list[dict],
+    summary: str,
+) -> str:
+    """Save flash-audit results to in-memory storage so the dashboard can read them.
+
+    Returns the repo_id (existing or newly created).
+    """
+    from datetime import datetime, timezone
+    import uuid as _uuid
+
+    # Determine platform from URL
+    if "gitlab.com" in clone_url:
+        platform = "gitlab"
+    elif "bitbucket.org" in clone_url:
+        platform = "bitbucket"
+    else:
+        platform = "github"
+
+    # Register repo if not already present
+    existing = storage.get_repo_by_full_name(repo_full_name)
+    if existing:
+        repo_id = existing["id"]
+    else:
+        repo_id = str(_uuid.uuid4())
+        now = datetime.now(timezone.utc)
+        parts = repo_full_name.split("/", 1)
+        storage.save_repo(repo_id, {
+            "id": repo_id,
+            "platform": platform,
+            "owner": parts[0],
+            "name": parts[1] if len(parts) > 1 else parts[0],
+            "full_name": repo_full_name,
+            "clone_url": clone_url,
+            "default_branch": "main",
+            "primary_language": None,
+            "is_active": True,
+            "config": {},
+            "created_at": now,
+            "updated_at": now,
+        })
+
+    now = datetime.now(timezone.utc)
+
+    # Save individual findings
+    sev_map = {"CRITICAL": "CRITICAL", "HIGH": "HIGH", "MEDIUM": "MEDIUM", "LOW": "LOW", "INFO": "INFO"}
+    for f in findings:
+        finding_id = str(_uuid.uuid4())
+        storage.save_finding(finding_id, {
+            "id": finding_id,
+            "repository_id": repo_id,
+            "file_path": f.get("file") or None,
+            "line_start": f.get("line") or None,
+            "line_end": None,
+            "category": f.get("category", "security"),
+            "severity": sev_map.get(f.get("severity", "MEDIUM"), "MEDIUM"),
+            "title": f.get("title", "Finding"),
+            "description": f.get("description", ""),
+            "evidence": f.get("evidence") or None,
+            "suggested_fix": f.get("suggested_fix") or None,
+            "reasoning": None,
+            "cwe_id": f.get("cwe") or None,
+            "confidence": 0.8,
+            "agent_source": "flash_audit",
+            "status": "open",
+            "pr_number": None,
+            "created_at": now.isoformat(),
+            "resolved_at": None,
+            "is_suppressed": False,
+        })
+
+    # Compute sub-scores from findings
+    sev_penalties = {"CRITICAL": 20, "HIGH": 10, "MEDIUM": 5, "LOW": 2, "INFO": 0}
+    sub = {"code_quality": 100.0, "security": 100.0, "dependencies": 100.0, "documentation": 100.0, "test_coverage": 100.0}
+    cat_to_sub = {"security": "security", "dependency": "dependencies", "quality": "code_quality"}
+    for f in findings:
+        cat = f.get("category", "quality")
+        sub_key = cat_to_sub.get(cat, "code_quality")
+        sub[sub_key] = max(0.0, sub[sub_key] - sev_penalties.get(f.get("severity", "MEDIUM"), 5))
+
+    # Save health record
+    storage.save_health_record({
+        "id": str(_uuid.uuid4()),
+        "repository_id": repo_id,
+        "timestamp": now,
+        "overall_score": float(health_score),
+        "grade": grade,
+        "score_code_quality": sub["code_quality"],
+        "score_security": sub["security"],
+        "score_dependencies": sub["dependencies"],
+        "score_documentation": sub["documentation"],
+        "score_test_coverage": sub["test_coverage"],
+        "critical_count": sum(1 for f in findings if f.get("severity") == "CRITICAL"),
+        "high_count": sum(1 for f in findings if f.get("severity") == "HIGH"),
+        "medium_count": sum(1 for f in findings if f.get("severity") == "MEDIUM"),
+        "low_count": sum(1 for f in findings if f.get("severity") == "LOW"),
+        "info_count": sum(1 for f in findings if f.get("severity") == "INFO"),
+        "trigger_event": "flash_audit",
+        "trigger_pr_number": None,
+        "metadata": {"verdict": "flash_audit", "token_cost": 0, "files_reviewed": 0, "summary": summary},
+    })
+
+    # Save audit log entry
+    storage.save_audit_log({
+        "id": str(_uuid.uuid4()),
+        "repository_id": repo_id,
+        "timestamp": now,
+        "event_type": "flash_audit",
+        "actor": "RepoGuardian",
+        "metadata": {"health_score": health_score, "grade": grade, "total_findings": len(findings)},
+    })
+
+    logger.info("[scan] Persisted %d findings for repo %s (id=%s)", len(findings), repo_full_name, repo_id)
+    return repo_id

@@ -86,9 +86,14 @@ app = FastAPI(
 
 # ── CORS ───────────────────────────────────────────────────────────────────────
 
+_cors_origins = ["http://localhost:3000", "http://localhost:5173"]
+if settings.frontend_url:
+    _cors_origins.append(settings.frontend_url.rstrip("/"))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],
+    allow_origins=_cors_origins,
+    allow_origin_regex=r"https://.*\.onrender\.com",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

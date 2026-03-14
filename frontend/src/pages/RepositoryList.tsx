@@ -24,20 +24,30 @@ function mapMessageToProgress(msg: string): number {
 
 async function findOrRegisterRepo(cloneUrl: string): Promise<string | null> {
   const m = cloneUrl.match(/(?:github\.com|gitlab\.com|bitbucket\.org)[/:]([^/]+)\/([^/\s.]+?)(?:\.git)?$/);
-  if (!m) return null;
+  if (!m) {
+    console.error("[findOrRegisterRepo] Could not parse URL:", cloneUrl);
+    return null;
+  }
   const fullName = `${m[1]}/${m[2]}`;
+  console.log("[findOrRegisterRepo] Registering repo:", fullName);
   try {
     const repo = await api.monitoring.register({
       clone_url: cloneUrl,
       webhook_secret: "",
       events: { pull_requests: false, pushes: false, merges: false },
     });
+    console.log("[findOrRegisterRepo] Registered successfully, id:", repo.id);
     return repo.id;
-  } catch {
+  } catch (registerErr) {
+    console.warn("[findOrRegisterRepo] Register failed:", String(registerErr));
     try {
       const repos = await api.repositories.list();
-      return repos.find((r) => r.full_name === fullName)?.id ?? null;
-    } catch {
+      console.log("[findOrRegisterRepo] Repo list:", repos.map(r => r.full_name));
+      const found = repos.find((r) => r.full_name === fullName);
+      console.log("[findOrRegisterRepo] Found existing:", found?.id ?? "none");
+      return found?.id ?? null;
+    } catch (listErr) {
+      console.error("[findOrRegisterRepo] List also failed:", String(listErr));
       return null;
     }
   }
@@ -117,10 +127,12 @@ export const RepositoryList: React.FC = () => {
 
     try {
       // Step 1: Start scan
+      console.log("[audit] Starting scan for:", repoUrl.trim());
       const { scan_id } = await api.scan.start(repoUrl.trim());
+      console.log("[audit] Got scan_id:", scan_id);
 
       // Step 2: Stream progress via fetch (more reliable than EventSource through Vite proxy)
-      const response = await fetch(`/api/scan/${scan_id}/stream`, { signal: abort.signal });
+      const response = await fetch(api.scan.streamUrl(scan_id), { signal: abort.signal });
       if (!response.ok) throw new Error(`Stream failed: HTTP ${response.status}`);
       if (!response.body) throw new Error("No response body from stream");
 
@@ -153,26 +165,37 @@ export const RepositoryList: React.FC = () => {
           }
 
           if (ev.type === "done") {
+            console.log("[audit] Done event:", ev);
             setProgress(100);
             setResult(ev);
-            // Register/find repo to get dashboard ID
-            const id = await findOrRegisterRepo(repoUrl.trim()).catch(() => null);
+            // Prefer repo_id from backend (persisted), fall back to register/lookup
+            let id: string | null = ev.repo_id ?? null;
+            if (!id) {
+              id = await findOrRegisterRepo(repoUrl.trim()).catch((e) => {
+                console.error("[audit] findOrRegisterRepo threw:", e);
+                return null;
+              });
+            }
+            console.log("[audit] savedRepoId:", id);
             if (id) setSavedRepoId(id);
             setPhase("complete");
             return;
           }
 
           if (ev.type === "error") {
+            console.error("[audit] Error event from SSE:", ev.message);
             throw new Error(ev.message);
           }
         }
       }
 
       // Stream ended without a done/error event
+      console.warn("[audit] Stream ended without done/error event");
       throw new Error("Scan stream ended unexpectedly. Check if the backend is running.");
 
     } catch (e: unknown) {
       if (e instanceof Error && e.name === "AbortError") return; // user cancelled
+      console.error("[audit] Caught error:", e);
       setErrorMessage(e instanceof Error ? e.message : String(e));
       setPhase("error");
     }
@@ -308,6 +331,7 @@ export const RepositoryList: React.FC = () => {
       )}
 
       {/* ── COMPLETE ── */}
+      {phase === "complete" && result && console.log("[render] complete phase, savedRepoId:", savedRepoId) as unknown as false && null}
       {phase === "complete" && result && (
         <div style={{
           maxWidth: 560, margin: "80px auto", padding: "0 24px",

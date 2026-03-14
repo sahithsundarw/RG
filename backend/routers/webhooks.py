@@ -31,7 +31,7 @@ async def github_webhook(
     request: Request,
     background_tasks: BackgroundTasks,
     x_github_event: str = Header(...),
-    x_hub_signature_256: str = Header(...),
+    x_hub_signature_256: str = Header(default=""),
 ) -> dict:
     """Receive and enqueue a GitHub webhook event."""
     raw_body = await request.body()
@@ -132,10 +132,27 @@ async def github_pr_comment_webhook(
 # ── Background task ────────────────────────────────────────────────────────────
 
 async def _enqueue_event(event: WebhookEvent) -> None:
-    """Publish the event to the Redis stream."""
+    """Publish the event to Redis stream, or run flash audit directly as fallback."""
     try:
         redis = await get_redis()
         producer = EventQueueProducer(redis)
         await producer.publish(event)
+        logger.info("Event %s enqueued to Redis stream", event.event_id)
     except Exception as e:
-        logger.debug("Redis unavailable — event %s not queued (direct mode)", event.event_id)
+        logger.warning(
+            "Redis unavailable (%s) — running flash audit directly for %s",
+            e, event.repo_full_name,
+        )
+        # Fallback: run flash audit directly (no Redis/worker needed)
+        from backend.routers.scan import run_audit_for_repo
+        clone_url = event.repo_clone_url or f"https://github.com/{event.repo_full_name}.git"
+        try:
+            result = await run_audit_for_repo(clone_url)
+            if result:
+                logger.info(
+                    "Direct audit complete for %s — score=%s grade=%s findings=%s",
+                    event.repo_full_name, result.get("health_score"),
+                    result.get("grade"), result.get("total_findings"),
+                )
+        except Exception as audit_err:
+            logger.error("Direct audit failed for %s: %s", event.repo_full_name, audit_err)

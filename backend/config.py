@@ -48,11 +48,14 @@ class Settings(BaseSettings):
     claude_max_tokens_output: int = 4096
     claude_temperature: float = 0.1
 
+    # ── Frontend URL (for CORS) ────────────────────────────────────────────────
+    frontend_url: str = ""
+
     # ── GitHub ─────────────────────────────────────────────────────────────────
     github_app_id: str = ""
     github_private_key_path: str = ""
     github_webhook_secret: str = Field(
-        ..., description="HMAC secret for webhook signature verification"
+        default="", description="HMAC secret for webhook signature verification"
     )
     github_token: str = Field("", description="Personal access token (dev/testing)")
 

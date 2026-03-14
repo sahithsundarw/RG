@@ -112,6 +112,7 @@ export interface SseDoneEvent {
   health_score: number;
   grade: string;
   total_findings: number;
+  repo_id?: string;
 }
 
 export interface SseErrorEvent {
@@ -173,8 +174,11 @@ export const api = {
   scan: {
     start: (repoUrl: string) => post<ScanStartResponse>("/api/scan", { repo_url: repoUrl }),
     result: (scanId: string) => get<ScanResult>(`/api/scan/${scanId}/result`),
-    // Use relative path so Vite proxy handles it — avoids EventSource CORS issues
-    streamUrl: (scanId: string) => `/api/scan/${scanId}/stream`,
+    // In dev: relative path (Vite proxy). In prod: full backend URL.
+    streamUrl: (scanId: string) =>
+      BASE_URL === "http://localhost:8000"
+        ? `/api/scan/${scanId}/stream`
+        : `${BASE_URL}/api/scan/${scanId}/stream`,
   },
   monitoring: {
     register: (config: MonitoringConfig) => {
