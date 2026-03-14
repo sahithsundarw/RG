@@ -226,3 +226,43 @@ class StateStore:
 
     async def get_cached_result(self, cache_key: str) -> dict | None:
         return await self.get(f"cache:{cache_key}")
+
+
+# ── No-op fallback when Redis is unavailable ──────────────────────────────────
+
+
+class NullStateStore(StateStore):
+    """
+    Drop-in StateStore replacement used when Redis is unavailable.
+    All operations are no-ops; rate limits always pass.
+    """
+
+    def __init__(self) -> None:
+        pass  # no client needed
+
+    async def set(self, *a, **kw) -> None:
+        pass
+
+    async def get(self, *a, **kw):
+        return None
+
+    async def delete(self, *a, **kw) -> None:
+        pass
+
+    async def increment(self, *a, **kw) -> int:
+        return 0
+
+    async def set_finding_status(self, *a, **kw) -> None:
+        pass
+
+    async def get_finding_status(self, *a, **kw):
+        return None
+
+    async def check_rate_limit(self, *a, **kw) -> bool:
+        return True  # always allow when Redis is unavailable
+
+    async def cache_result(self, *a, **kw) -> None:
+        pass
+
+    async def get_cached_result(self, *a, **kw):
+        return None

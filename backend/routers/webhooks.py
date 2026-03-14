@@ -18,7 +18,7 @@ from backend.services.github_service import (
     parse_github_webhook,
     verify_github_signature,
 )
-from backend.services.redis_service import EventQueueProducer, StateStore, get_redis
+from backend.services.redis_service import EventQueueProducer, NullStateStore, StateStore, get_redis
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -101,8 +101,12 @@ async def github_pr_comment_webhook(
     from backend.agents.hitl_gateway import HITLGatewayAgent
     from backend.models.schemas import HITLActionRequest
 
-    redis = await get_redis()
-    state = StateStore(redis)
+    try:
+        redis = await get_redis()
+        state = StateStore(redis)
+    except Exception:
+        from backend.services.redis_service import NullStateStore
+        state = NullStateStore()
     github_client = GitHubAPIClient(settings.github_token)
     gateway = HITLGatewayAgent(github_client, state)
 
@@ -134,4 +138,4 @@ async def _enqueue_event(event: WebhookEvent) -> None:
         producer = EventQueueProducer(redis)
         await producer.publish(event)
     except Exception as e:
-        logger.error("Failed to enqueue event %s: %s", event.event_id, e)
+        logger.debug("Redis unavailable — event %s not queued (direct mode)", event.event_id)

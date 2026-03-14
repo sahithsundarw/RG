@@ -25,9 +25,10 @@ from backend.routers import (
     health_router,
     hitl_router,
     repositories_router,
+    scan_router,
     webhooks_router,
 )
-from backend.services.redis_service import close_redis, get_redis
+from backend.services.redis_service import close_redis
 
 settings = get_settings()
 
@@ -59,13 +60,8 @@ async def lifespan(app: FastAPI):
     """Startup and shutdown tasks."""
     logger.info("Starting %s v%s", settings.app_name, settings.app_version)
 
-    # Connect to Redis (optional — system degrades gracefully without it)
-    try:
-        redis = await get_redis()
-        await redis.ping()
-        logger.info("Redis connected at %s", settings.redis_url)
-    except Exception as e:
-        logger.warning("Redis connection failed: %s (events won't be queued)", e)
+    # Redis is optional — skip connection check at startup
+    logger.info("Redis optional — set REDIS_URL to enable event queuing")
 
     yield
 
@@ -105,6 +101,7 @@ app.include_router(health_router)
 app.include_router(repositories_router)
 app.include_router(findings_router)
 app.include_router(hitl_router)
+app.include_router(scan_router)
 
 
 # ── Root & health-check endpoints ─────────────────────────────────────────────
