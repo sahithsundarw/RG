@@ -158,13 +158,14 @@ async def run_audit_for_repo(repo_url: str, scan_path: str = "") -> dict | None:
         summary = await _llm_summarize(scan_label, security_findings, quality_findings, dep_findings, scan_root)
 
         all_findings = security_findings + quality_findings + dep_findings
-        health_score, grade = _compute_health_score(all_findings)
+        health_score, grade, sub_scores = _compute_health_score(all_findings)
 
         repo_id = _persist_scan_results(
             repo_full_name=repo_full_name,
             clone_url=repo_url,
             health_score=health_score,
             grade=grade,
+            sub_scores=sub_scores,
             findings=all_findings,
             summary=summary,
             scan_path=scan_path,
@@ -265,7 +266,7 @@ async def _run_flash_audit(scan_id: str, repo_url: str, queue: asyncio.Queue, sc
 
             # ── Step 4: Health score ───────────────────────────────────────────
             all_findings = security_findings + quality_findings + dep_findings
-            health_score, grade = _compute_health_score(all_findings)
+            health_score, grade, sub_scores = _compute_health_score(all_findings)
 
             # ── Step 5: Persist to storage so dashboard can display results ────
             repo_id = _persist_scan_results(
@@ -273,6 +274,7 @@ async def _run_flash_audit(scan_id: str, repo_url: str, queue: asyncio.Queue, sc
                 clone_url=repo_url,
                 health_score=health_score,
                 grade=grade,
+                sub_scores=sub_scores,
                 findings=all_findings,
                 summary=summary,
                 scan_path=scan_path,
@@ -666,38 +668,69 @@ Be direct and technical. Reference specific files, function names, and CVE IDs f
 # ── Health score ───────────────────────────────────────────────────────────────
 
 
-def _compute_health_score(findings: list[dict]) -> tuple[int, str]:
-    """Compute a 0–100 health score using per-category deduction + weighted composite.
+def _compute_health_score(findings: list[dict]) -> tuple[int, str, dict[str, float]]:
+    """Compute a 0–100 health score with realistic calibration.
 
-    Each finding deducts from its own category subscore (capped at 0 per category),
-    then the overall score is a weighted average of all category scores.  This
-    prevents a handful of issues in one category from collapsing the entire score
-    to zero — a repo with solid code quality but a few security issues should not
-    score 0.
+    Design principles:
+    - Per-category deduction so one bad area doesn't zero-out everything
+    - Confidence-weighted penalties: bandit LOW-confidence noise barely registers
+    - Diminishing returns: the 10th finding of the same severity matters much less
+      than the 1st (decay floor 20%)
+    - Small base penalties calibrated so typical codebases land in 55–85 range
+
+    Typical outcomes:
+      Clean repo (few LOW-confidence bandit hits)      → 90–100 (A)
+      Good repo with a handful of real issues          → 75–88  (B)
+      Average repo with mixed security+quality issues  → 55–74  (C)
+      Problematic repo with many HIGH/CRITICAL         → 35–54  (D)
+      Severely broken codebase                         → < 35   (F)
+
+    Returns (overall_score, grade, sub_scores_dict).
     """
-    _PENALTIES = {"CRITICAL": 20, "HIGH": 10, "MEDIUM": 5, "LOW": 2, "INFO": 0}
+    # Base penalty per finding (before confidence/decay adjustment)
+    _BASE = {"CRITICAL": 12, "HIGH": 6, "MEDIUM": 2, "LOW": 0.5, "INFO": 0.0}
+    # Confidence multiplier — bandit LOW-confidence findings are often false positives
+    _CONF = {"HIGH": 1.0, "MEDIUM": 0.65, "LOW": 0.2}
     _CAT_TO_SUB = {
-        "SECURITY":   "security",
+        "SECURITY":    "security",
         "DEPENDENCY":  "dependencies",
         "CODE_SMELL":  "code_quality",
         "BUG":         "code_quality",
     }
     _WEIGHTS = {
-        "code_quality":  0.25,
-        "security":      0.30,
+        "security":      0.35,
+        "code_quality":  0.30,
         "dependencies":  0.20,
-        "documentation": 0.15,
-        "test_coverage": 0.10,
+        "documentation": 0.10,
+        "test_coverage": 0.05,
     }
+    _SEV_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
 
-    sub = {k: 100.0 for k in _WEIGHTS}
+    # Group findings by subscore bucket
+    by_sub: dict[str, list[dict]] = {k: [] for k in _WEIGHTS}
     for f in findings:
-        sub_key = _CAT_TO_SUB.get(f.get("category", "CODE_SMELL"), "code_quality")
-        penalty = _PENALTIES.get(f.get("severity", "LOW"), 2)
-        sub[sub_key] = max(0.0, sub[sub_key] - penalty)
+        sub = _CAT_TO_SUB.get(f.get("category", "CODE_SMELL"), "code_quality")
+        by_sub[sub].append(f)
 
-    score = sum(sub[k] * w for k, w in _WEIGHTS.items())
-    score = max(0, min(100, round(score)))
+    sub_scores: dict[str, float] = {k: 100.0 for k in _WEIGHTS}
+
+    for sub_key, bucket in by_sub.items():
+        # Sort worst-first so diminishing returns hit lesser issues
+        bucket.sort(key=lambda f: _SEV_ORDER.get(f.get("severity", "LOW"), 3))
+        for i, f in enumerate(bucket):
+            base = _BASE.get(f.get("severity", "LOW"), 0.5)
+            # String confidence from bandit; numeric confidence (0–1) from agents
+            raw_conf = f.get("confidence", "MEDIUM")
+            if isinstance(raw_conf, (int, float)):
+                conf_mult = max(0.2, float(raw_conf))
+            else:
+                conf_mult = _CONF.get(str(raw_conf).upper(), 0.65)
+            # Diminishing returns: each successive finding has ≤20% less impact, floored at 20%
+            decay = max(0.2, 1.0 - 0.12 * i)
+            sub_scores[sub_key] = max(0.0, sub_scores[sub_key] - base * conf_mult * decay)
+
+    overall = sum(sub_scores[k] * w for k, w in _WEIGHTS.items())
+    score = max(0, min(100, round(overall)))
 
     if score >= 90:
         grade = "A"
@@ -710,7 +743,7 @@ def _compute_health_score(findings: list[dict]) -> tuple[int, str]:
     else:
         grade = "F"
 
-    return score, grade
+    return score, grade, sub_scores
 
 
 # ── Persist scan results to storage ───────────────────────────────────────────
@@ -721,6 +754,7 @@ def _persist_scan_results(
     clone_url: str,
     health_score: int,
     grade: str,
+    sub_scores: dict[str, float],
     findings: list[dict],
     summary: str,
     scan_path: str = "",
@@ -803,27 +837,18 @@ def _persist_scan_results(
             "is_suppressed": False,
         })
 
-    # Compute sub-scores from findings
-    sev_penalties = {"CRITICAL": 20, "HIGH": 10, "MEDIUM": 5, "LOW": 2, "INFO": 0}
-    sub = {"code_quality": 100.0, "security": 100.0, "dependencies": 100.0, "documentation": 100.0, "test_coverage": 100.0}
-    cat_to_sub = {"SECURITY": "security", "DEPENDENCY": "dependencies", "CODE_SMELL": "code_quality", "BUG": "code_quality"}
-    for f in findings:
-        cat = f.get("category", "quality")
-        sub_key = cat_to_sub.get(cat, "code_quality")
-        sub[sub_key] = max(0.0, sub[sub_key] - sev_penalties.get(f.get("severity", "MEDIUM"), 5))
-
-    # Save health record
+    # Save health record — use sub_scores from _compute_health_score (confidence+decay weighted)
     storage.save_health_record({
         "id": str(_uuid.uuid4()),
         "repository_id": repo_id,
         "timestamp": now,
         "overall_score": float(health_score),
         "grade": grade,
-        "score_code_quality": sub["code_quality"],
-        "score_security": sub["security"],
-        "score_dependencies": sub["dependencies"],
-        "score_documentation": sub["documentation"],
-        "score_test_coverage": sub["test_coverage"],
+        "score_code_quality": round(sub_scores.get("code_quality", 100.0), 1),
+        "score_security": round(sub_scores.get("security", 100.0), 1),
+        "score_dependencies": round(sub_scores.get("dependencies", 100.0), 1),
+        "score_documentation": round(sub_scores.get("documentation", 100.0), 1),
+        "score_test_coverage": round(sub_scores.get("test_coverage", 100.0), 1),
         "critical_count": sum(1 for f in findings if f.get("severity") == "CRITICAL"),
         "high_count": sum(1 for f in findings if f.get("severity") == "HIGH"),
         "medium_count": sum(1 for f in findings if f.get("severity") == "MEDIUM"),
