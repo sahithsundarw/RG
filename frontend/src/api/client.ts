@@ -220,7 +220,7 @@ export const api = {
       if (config.clone_url.includes("gitlab.com")) platform = "gitlab";
       else if (config.clone_url.includes("bitbucket.org")) platform = "bitbucket";
       // Strip trailing slash and .git suffix, then grab the last two path segments
-      const clean = config.clone_url.trim().replace(/\.git$/, "").replace(/\/$/, "");
+      const clean = config.clone_url.trim().replace(/\/$/, "").replace(/\.git$/, "");
       const parts = clean.split("/");
       const name  = parts[parts.length - 1] ?? "";
       const owner = parts[parts.length - 2] ?? "";

@@ -47,6 +47,9 @@ class DetectProjectsResponse(BaseModel):
 @router.post("", response_model=RepositoryResponse, status_code=status.HTTP_200_OK)
 async def register_repository(body: RepositoryCreate) -> RepositoryResponse:
     """Register a new repository for monitoring."""
+    if not body.owner or not body.name:
+        raise HTTPException(status_code=422, detail="owner and name must not be empty")
+
     full_name = f"{body.owner}/{body.name}"
 
     existing = storage.get_repo_by_platform_name(body.platform.value, full_name)

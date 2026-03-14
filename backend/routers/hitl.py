@@ -12,7 +12,7 @@ from backend.agents.hitl_gateway import HITLGatewayAgent
 from backend.config import get_settings
 from backend.models.schemas import HITLActionRequest, HITLActionResponse
 from backend.services.github_service import GitHubAPIClient
-from backend.services.redis_service import StateStore, get_redis
+from backend.services.redis_service import NullStateStore, StateStore, get_redis
 
 router = APIRouter(prefix="/api/hitl", tags=["hitl"])
 settings = get_settings()
@@ -29,8 +29,11 @@ async def hitl_action(
 
     The X-Actor header identifies the user taking the action.
     """
-    redis = await get_redis()
-    state = StateStore(redis)
+    try:
+        redis = await get_redis()
+        state = StateStore(redis)
+    except Exception:
+        state = NullStateStore()
     github_client = GitHubAPIClient(settings.github_token)
     gateway = HITLGatewayAgent(github_client, state)
 

@@ -105,7 +105,7 @@ class HealthAggregatorAgent:
     async def get_dashboard(self, repo_id: str) -> HealthDashboard | None:
         """Build the full dashboard payload for a repository."""
         repo = storage.get_repo(repo_id)
-        if not repo:
+        if not repo or not repo.get("is_active", True):
             return None
 
         latest = storage.get_latest_health_record(repo_id)

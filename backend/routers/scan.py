@@ -481,11 +481,11 @@ def _compute_health_score(findings: list[dict]) -> tuple[int, str]:
 
     if score >= 90:
         grade = "A"
-    elif score >= 80:
+    elif score >= 75:
         grade = "B"
-    elif score >= 70:
-        grade = "C"
     elif score >= 60:
+        grade = "C"
+    elif score >= 40:
         grade = "D"
     else:
         grade = "F"
