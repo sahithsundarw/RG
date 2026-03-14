@@ -94,7 +94,15 @@ async def get_scan_result(scan_id: str) -> dict:
         return {"status": "running"}
     if scan["error"]:
         return {"status": "error", "error": scan["error"]}
-    return {"status": "complete", "result": scan["result"]}
+    r = scan["result"] or {}
+    return {
+        "status": "complete",
+        "repo_id": r.get("repo_id"),
+        "health_score": r.get("health_score"),
+        "grade": r.get("grade"),
+        "total_findings": r.get("counts", {}).get("total"),
+        "summary": r.get("summary"),
+    }
 
 
 # ── Public entry point for webhook-triggered audits ───────────────────────────

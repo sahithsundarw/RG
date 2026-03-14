@@ -177,11 +177,21 @@ export const api = {
     streamUrl: (scanId: string) => `${BASE_URL}/api/scan/${scanId}/stream`,
   },
   monitoring: {
-    register: (config: MonitoringConfig) =>
-      post<Repository>("/api/repositories", {
+    register: (config: MonitoringConfig) => {
+      let platform = "github";
+      if (config.clone_url.includes("gitlab.com")) platform = "gitlab";
+      else if (config.clone_url.includes("bitbucket.org")) platform = "bitbucket";
+      const m = config.clone_url.match(/(?:github\.com|gitlab\.com|bitbucket\.org)[:/]([^/]+)\/([^/\s.]+?)(?:\.git)?$/);
+      const owner = m?.[1] ?? "";
+      const name = m?.[2] ?? "";
+      return post<Repository>("/api/repositories", {
+        platform,
+        owner,
+        name,
         clone_url: config.clone_url,
-        webhook_secret: config.webhook_secret,
-        trigger_events: config.events,
-      }),
+        default_branch: "main",
+        config: { webhook_secret: config.webhook_secret, trigger_events: config.events },
+      });
+    },
   },
 };
