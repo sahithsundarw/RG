@@ -7,8 +7,8 @@ export const App: React.FC = () => (
   <BrowserRouter>
     <div style={{
       minHeight: "100vh",
-      background: "#0f172a",
-      fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+      background: "#F9FAFB",
+      fontFamily: "'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
     }}>
       <Routes>
         <Route path="/" element={<RepositoryList />} />

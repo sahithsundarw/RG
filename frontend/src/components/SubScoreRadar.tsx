@@ -26,22 +26,33 @@ export const SubScoreRadar: React.FC<Props> = ({ subScores }) => {
   ];
 
   return (
-    <div style={{ background: "#1e293b", borderRadius: 16, padding: 24 }}>
-      <h3 style={{ color: "#f1f5f9", margin: "0 0 16px", fontSize: 16 }}>Sub-Score Breakdown</h3>
+    <div style={{
+      background: "#FFFFFF",
+      border: "1px solid #E2E8F0",
+      borderRadius: 12,
+      padding: 24,
+      boxShadow: "0 1px 3px 0 rgba(0,0,0,0.07)",
+    }}>
+      <h3 style={{ color: "#0F172A", margin: "0 0 16px", fontSize: 14, fontWeight: 600 }}>
+        Sub-Score Breakdown
+      </h3>
       <ResponsiveContainer width="100%" height={280}>
         <RadarChart data={data}>
-          <PolarGrid stroke="#334155" />
-          <PolarAngleAxis dataKey="subject" tick={{ fill: "#94a3b8", fontSize: 12 }} />
-          <PolarRadiusAxis domain={[0, 100]} tick={{ fill: "#64748b", fontSize: 10 }} />
+          <PolarGrid stroke="#E2E8F0" />
+          <PolarAngleAxis dataKey="subject" tick={{ fill: "#64748B", fontSize: 12 }} />
+          <PolarRadiusAxis domain={[0, 100]} tick={{ fill: "#94A3B8", fontSize: 10 }} />
           <Radar
             name="Score"
             dataKey="value"
-            stroke="#6366f1"
-            fill="#6366f1"
-            fillOpacity={0.3}
+            stroke="#0F172A"
+            fill="#0F172A"
+            fillOpacity={0.06}
           />
           <Tooltip
-            contentStyle={{ background: "#0f172a", border: "1px solid #334155", color: "#f1f5f9" }}
+            contentStyle={{
+              background: "#FFFFFF", border: "1px solid #E2E8F0",
+              color: "#0F172A", borderRadius: 8, fontSize: 13,
+            }}
             formatter={(v: number) => [`${v.toFixed(1)}`, "Score"]}
           />
         </RadarChart>

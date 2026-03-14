@@ -94,6 +94,57 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   return res.json();
 }
 
+// ── Scan types ────────────────────────────────────────────────────────────────
+
+export interface ScanStartResponse {
+  scan_id: string;
+  status: "queued";
+}
+
+export interface SseProgressEvent {
+  type: "progress";
+  message: string;
+}
+
+export interface SseDoneEvent {
+  type: "done";
+  message: string;
+  health_score: number;
+  grade: string;
+  total_findings: number;
+}
+
+export interface SseErrorEvent {
+  type: "error";
+  message: string;
+}
+
+export interface SseHeartbeatEvent {
+  type: "heartbeat";
+}
+
+export type SseEvent = SseProgressEvent | SseDoneEvent | SseErrorEvent | SseHeartbeatEvent;
+
+export interface ScanResult {
+  scan_id: string;
+  repo_url: string;
+  health_score: number;
+  grade: string;
+  total_findings: number;
+  summary?: string;
+  repo_id?: string;
+}
+
+export interface MonitoringConfig {
+  clone_url: string;
+  webhook_secret: string;
+  events: {
+    pull_requests: boolean;
+    pushes: boolean;
+    merges: boolean;
+  };
+}
+
 export const api = {
   repositories: {
     list: () => get<Repository[]>("/api/repositories"),
@@ -118,5 +169,18 @@ export const api = {
   hitl: {
     action: (findingId: string, action: string, reasonCode?: string) =>
       post(`/api/hitl/${findingId}/action`, { action, reason_code: reasonCode }),
+  },
+  scan: {
+    start: (repoUrl: string) => post<ScanStartResponse>("/api/scan", { repo_url: repoUrl }),
+    result: (scanId: string) => get<ScanResult>(`/api/scan/${scanId}/result`),
+    streamUrl: (scanId: string) => `${BASE_URL}/api/scan/${scanId}/stream`,
+  },
+  monitoring: {
+    register: (config: MonitoringConfig) =>
+      post<Repository>("/api/repositories", {
+        clone_url: config.clone_url,
+        webhook_secret: config.webhook_secret,
+        trigger_events: config.events,
+      }),
   },
 };
