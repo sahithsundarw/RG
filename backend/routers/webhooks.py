@@ -133,6 +133,24 @@ async def github_pr_comment_webhook(
 
 async def _enqueue_event(event: WebhookEvent) -> None:
     """Publish the event to Redis stream, or run flash audit directly as fallback."""
+    import backend.services.storage as storage
+    from backend.routers.events import broadcast
+
+    # Respect per-repo trigger_events config
+    existing = storage.get_repo_by_full_name(event.repo_full_name)
+    if existing:
+        triggers = existing.get("config", {}).get("trigger_events", {})
+        et = event.event_type.value
+        if et in ("pr_open", "pr_update") and not triggers.get("pull_requests", True):
+            logger.info("PR events disabled for %s — skipping", event.repo_full_name)
+            return
+        if et == "push_to_main" and not triggers.get("pushes", True):
+            logger.info("Push events disabled for %s — skipping", event.repo_full_name)
+            return
+        if et == "pr_merge" and not triggers.get("merges", False):
+            logger.info("Merge events disabled for %s — skipping", event.repo_full_name)
+            return
+
     try:
         redis = await get_redis()
         producer = EventQueueProducer(redis)
@@ -143,7 +161,6 @@ async def _enqueue_event(event: WebhookEvent) -> None:
             "Redis unavailable (%s) — running flash audit directly for %s",
             e, event.repo_full_name,
         )
-        # Fallback: run flash audit directly (no Redis/worker needed)
         from backend.routers.scan import run_audit_for_repo
         clone_url = event.repo_clone_url or f"https://github.com/{event.repo_full_name}.git"
         try:
@@ -154,5 +171,14 @@ async def _enqueue_event(event: WebhookEvent) -> None:
                     event.repo_full_name, result.get("health_score"),
                     result.get("grade"), result.get("total_findings"),
                 )
+                await broadcast({
+                    "type": "webhook_processed",
+                    "repo_full_name": event.repo_full_name,
+                    "repo_id": result.get("repo_id"),
+                    "event_type": event.event_type.value,
+                    "health_score": result.get("health_score"),
+                    "grade": result.get("grade"),
+                    "total_findings": result.get("total_findings"),
+                })
         except Exception as audit_err:
             logger.error("Direct audit failed for %s: %s", event.repo_full_name, audit_err)

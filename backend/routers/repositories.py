@@ -60,6 +60,7 @@ async def register_repository(body: RepositoryCreate) -> RepositoryResponse:
             primary_language=existing.get("primary_language"),
             is_active=existing.get("is_active", True),
             created_at=existing["created_at"],
+            config=existing.get("config", {}),
         )
 
     repo_id = str(uuid.uuid4())
@@ -89,6 +90,7 @@ async def register_repository(body: RepositoryCreate) -> RepositoryResponse:
         primary_language=None,
         is_active=True,
         created_at=now,
+        config=body.config,
     )
 
 
@@ -106,6 +108,7 @@ async def list_repositories() -> list[RepositoryResponse]:
             primary_language=r.get("primary_language"),
             is_active=r.get("is_active", True),
             created_at=r["created_at"],
+            config=r.get("config", {}),
         )
         for r in repos
     ]
@@ -127,6 +130,7 @@ async def get_repository(repo_id: str) -> RepositoryResponse:
         primary_language=repo.get("primary_language"),
         is_active=repo.get("is_active", True),
         created_at=repo["created_at"],
+        config=repo.get("config", {}),
     )
 
 

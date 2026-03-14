@@ -363,6 +363,7 @@ class RepositoryResponse(BaseModel):
     primary_language: str | None
     is_active: bool
     created_at: datetime
+    config: dict[str, Any] = Field(default_factory=dict)
 
     class Config:
         from_attributes = True

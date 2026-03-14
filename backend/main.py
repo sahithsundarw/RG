@@ -23,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 
 from backend.config import get_settings
 from backend.routers import (
+    events_router,
     findings_router,
     health_router,
     hitl_router,
@@ -108,6 +109,7 @@ app.include_router(repositories_router)
 app.include_router(findings_router)
 app.include_router(hitl_router)
 app.include_router(scan_router)
+app.include_router(events_router)
 
 # ── Serve frontend static files ────────────────────────────────────────────────
 

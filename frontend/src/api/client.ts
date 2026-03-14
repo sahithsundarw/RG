@@ -55,6 +55,10 @@ export interface Repository {
   primary_language: string | null;
   is_active: boolean;
   created_at: string;
+  config?: {
+    webhook_secret?: string;
+    trigger_events?: { pull_requests: boolean; pushes: boolean; merges: boolean };
+  };
 }
 
 export interface Finding {
@@ -192,6 +196,9 @@ export const api = {
       post<ScanStartResponse>("/api/scan", { repo_url: repoUrl, scan_path: scanPath ?? "" }),
     result: (scanId: string) => get<ScanResult>(`/api/scan/${scanId}/result`),
     streamUrl: (scanId: string) => `${BASE_URL}/api/scan/${scanId}/stream`,
+  },
+  events: {
+    streamUrl: () => `${BASE_URL}/api/events/stream`,
   },
   monitoring: {
     register: (config: MonitoringConfig) => {

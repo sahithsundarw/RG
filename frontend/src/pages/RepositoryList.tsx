@@ -1013,7 +1013,7 @@ export const RepositoryList: React.FC = () => {
       <MonitoringModal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
-        onSaved={() => setModalOpen(false)}
+        onSaved={(repoId) => { setModalOpen(false); navigate("/repos"); }}
       />
       </div>{/* end floating window */}
     </div>

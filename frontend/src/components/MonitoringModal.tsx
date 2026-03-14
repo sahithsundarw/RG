@@ -6,7 +6,7 @@ import { api } from "../api/client";
 interface Props {
   open: boolean;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (repoId: string) => void;
 }
 
 export const MonitoringModal: React.FC<Props> = ({ open, onClose, onSaved }) => {
@@ -17,12 +17,15 @@ export const MonitoringModal: React.FC<Props> = ({ open, onClose, onSaved }) => 
   const [mergeEnabled, setMergeEnabled] = useState(false);
   const [saving,       setSaving]       = useState(false);
   const [error,        setError]        = useState<string | null>(null);
+  const [savedRepoId,  setSavedRepoId]  = useState<string | null>(null);
+  const [copied,       setCopied]       = useState(false);
   const [urlFocused,   setUrlFocused]   = useState(false);
   const [secFocused,   setSecFocused]   = useState(false);
   const firstInputRef = useRef<HTMLInputElement>(null);
+  const webhookEndpoint = `${window.location.origin}/webhooks/github`;
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) { setSavedRepoId(null); setError(null); setCopied(false); return; }
     const timer = setTimeout(() => firstInputRef.current?.focus(), 50);
     const handleKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("keydown", handleKey);
@@ -41,14 +44,20 @@ export const MonitoringModal: React.FC<Props> = ({ open, onClose, onSaved }) => 
         webhook_secret: secret.trim(),
         events: { pull_requests: prEnabled, pushes: pushEnabled, merges: mergeEnabled },
       };
-      await api.monitoring.register(config);
-      onSaved();
-      onClose();
+      const repo = await api.monitoring.register(config);
+      setSavedRepoId(repo.id);
     } catch (e) {
       setError(String(e));
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(webhookEndpoint).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
   };
 
   const inputStyle = (focused: boolean): React.CSSProperties => ({
@@ -98,10 +107,10 @@ export const MonitoringModal: React.FC<Props> = ({ open, onClose, onSaved }) => 
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
           <div>
             <h2 style={{ margin: "0 0 3px", fontSize: 16, fontWeight: 700, color: "var(--text-primary)" }}>
-              Connect Repository
+              {savedRepoId ? "Repository Connected" : "Connect Repository"}
             </h2>
             <p style={{ margin: 0, fontSize: 12, color: "var(--text-muted)" }}>
-              Configure webhook-based continuous monitoring
+              {savedRepoId ? "Now add the webhook URL to your GitHub repo settings" : "Configure webhook-based continuous monitoring"}
             </p>
           </div>
           <button
@@ -127,20 +136,54 @@ export const MonitoringModal: React.FC<Props> = ({ open, onClose, onSaved }) => 
           </button>
         </div>
 
+        {savedRepoId ? (
+          /* ── SUCCESS STATE ── */
+          <div style={{ animation: "fadeIn 0.25s ease" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", marginBottom: 20, background: "var(--success-soft)", border: "1px solid var(--success-border)", borderRadius: "var(--radius-md)" }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--success)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              <span style={{ fontSize: 13, color: "var(--success)", fontWeight: 500 }}>Repository registered successfully</span>
+            </div>
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }}>Step 1 — Copy your webhook URL</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, border: "1px solid var(--border)", borderRadius: "var(--radius-md)", padding: "8px 12px", background: "var(--bg)" }}>
+                <code style={{ flex: 1, fontSize: 11, color: "var(--text-primary)", fontFamily: "monospace", wordBreak: "break-all" }}>{webhookEndpoint}</code>
+                <button onClick={handleCopy} style={{ flexShrink: 0, background: copied ? "var(--success-soft)" : "var(--surface)", border: `1px solid ${copied ? "var(--success-border)" : "var(--border)"}`, borderRadius: "var(--radius-sm)", padding: "4px 10px", fontSize: 11, fontWeight: 600, color: copied ? "var(--success)" : "var(--text-secondary)", cursor: "pointer" }}>
+                  {copied ? "Copied!" : "Copy"}
+                </button>
+              </div>
+            </div>
+            <div style={{ marginBottom: 24 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>Step 2 — Add webhook in GitHub</div>
+              {[
+                "Go to your repo Settings -> Webhooks -> Add webhook",
+                "Paste the URL above into Payload URL",
+                "Set Content type to application/json",
+                "Enter the webhook secret you configured",
+                "Choose: Individual events -> Pull requests and Pushes",
+              ].map((step, i) => (
+                <div key={i} style={{ display: "flex", gap: 10, marginBottom: 8, alignItems: "flex-start" }}>
+                  <span style={{ flexShrink: 0, width: 18, height: 18, borderRadius: "50%", background: "var(--accent-soft)", border: "1px solid var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, color: "var(--accent)" }}>{i + 1}</span>
+                  <span style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.55 }}>{step}</span>
+                </div>
+              ))}
+            </div>
+            <button onClick={() => { onSaved(savedRepoId); onClose(); }}
+              style={{ width: "100%", padding: "10px 16px", background: "var(--accent)", color: "var(--accent-text)", border: "none", borderRadius: "var(--radius-md)", fontSize: 13, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "var(--accent-hover)")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "var(--accent)")}>
+              View Monitoring Dashboard
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+            </button>
+          </div>
+        ) : (
+          /* ── FORM STATE ── */
+          <>
         {/* URL */}
         <div style={{ marginBottom: 14 }}>
           <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>
             Repository URL
           </label>
-          <input
-            ref={firstInputRef}
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://github.com/owner/repo"
-            style={inputStyle(urlFocused)}
-            onFocus={() => setUrlFocused(true)}
-            onBlur={() => setUrlFocused(false)}
-          />
+          <input ref={firstInputRef} value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") handleSave(); }} placeholder="https://github.com/owner/repo" style={inputStyle(urlFocused)} onFocus={() => setUrlFocused(true)} onBlur={() => setUrlFocused(false)}/>
         </div>
 
         {/* Secret */}
@@ -148,15 +191,7 @@ export const MonitoringModal: React.FC<Props> = ({ open, onClose, onSaved }) => 
           <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>
             Webhook Secret
           </label>
-          <input
-            value={secret}
-            onChange={(e) => setSecret(e.target.value)}
-            placeholder="Your GitHub webhook secret"
-            type="password"
-            style={inputStyle(secFocused)}
-            onFocus={() => setSecFocused(true)}
-            onBlur={() => setSecFocused(false)}
-          />
+          <input value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="Your GitHub webhook secret" type="password" style={inputStyle(secFocused)} onFocus={() => setSecFocused(true)} onBlur={() => setSecFocused(false)}/>
         </div>
 
         {/* Event toggles */}
@@ -169,16 +204,7 @@ export const MonitoringModal: React.FC<Props> = ({ open, onClose, onSaved }) => 
             { label: "Pushes",         desc: "Analyze default branch",      value: pushEnabled,  onChange: setPushEnabled },
             { label: "Merges",         desc: "Validate before merge",       value: mergeEnabled, onChange: setMergeEnabled },
           ].map(({ label, desc, value, onChange }) => (
-            <div
-              key={label}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                padding: "11px 0",
-                borderBottom: "1px solid var(--border)",
-              }}
-            >
+            <div key={label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 0", borderBottom: "1px solid var(--border)" }}>
               <div>
                 <div style={{ fontSize: 13, color: "var(--text-primary)", fontWeight: 500 }}>{label}</div>
                 <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 1 }}>{desc}</div>
@@ -189,57 +215,27 @@ export const MonitoringModal: React.FC<Props> = ({ open, onClose, onSaved }) => 
         </div>
 
         {error && (
-          <div style={{
-            color: "var(--danger)",
-            fontSize: 12,
-            marginBottom: 14,
-            padding: "8px 12px",
-            background: "var(--danger-soft)",
-            border: "1px solid var(--danger-border)",
-            borderRadius: "var(--radius-md)",
-          }}>
+          <div style={{ color: "var(--danger)", fontSize: 12, marginBottom: 14, padding: "8px 12px", background: "var(--danger-soft)", border: "1px solid var(--danger-border)", borderRadius: "var(--radius-md)" }}>
             {error}
           </div>
         )}
 
         {/* Footer */}
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            style={{
-              flex: 1,
-              padding: "10px 16px",
-              background: saving ? "var(--border)" : "var(--accent)",
-              color: saving ? "var(--text-muted)" : "var(--accent-text)",
-              border: "none",
-              borderRadius: "var(--radius-md)",
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: saving ? "not-allowed" : "pointer",
-              transition: "background 0.15s",
-            }}
+          <button onClick={handleSave} disabled={saving}
+            style={{ flex: 1, padding: "10px 16px", background: saving ? "var(--border)" : "var(--accent)", color: saving ? "var(--text-muted)" : "var(--accent-text)", border: "none", borderRadius: "var(--radius-md)", fontSize: 13, fontWeight: 600, cursor: saving ? "not-allowed" : "pointer", transition: "background 0.15s" }}
             onMouseEnter={(e) => { if (!saving) e.currentTarget.style.background = "var(--accent-hover)"; }}
-            onMouseLeave={(e) => { if (!saving) e.currentTarget.style.background = "var(--accent)"; }}
-          >
+            onMouseLeave={(e) => { if (!saving) e.currentTarget.style.background = "var(--accent)"; }}>
             {saving ? "Saving..." : "Save Configuration"}
           </button>
-          <button
-            onClick={onClose}
-            style={{
-              background: "transparent",
-              border: "none",
-              color: "var(--text-muted)",
-              fontSize: 13,
-              cursor: "pointer",
-              padding: "10px 8px",
-              textDecoration: "underline",
-              textUnderlineOffset: 3,
-            }}
+          <button onClick={onClose}
+            style={{ background: "transparent", border: "none", color: "var(--text-muted)", fontSize: 13, cursor: "pointer", padding: "10px 8px", textDecoration: "underline", textUnderlineOffset: 3 }}
           >
             Cancel
           </button>
         </div>
+          </>
+        )}
       </div>
     </div>
   );
