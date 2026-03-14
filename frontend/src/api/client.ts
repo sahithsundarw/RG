@@ -219,9 +219,11 @@ export const api = {
       let platform = "github";
       if (config.clone_url.includes("gitlab.com")) platform = "gitlab";
       else if (config.clone_url.includes("bitbucket.org")) platform = "bitbucket";
-      const m = config.clone_url.match(/(?:github\.com|gitlab\.com|bitbucket\.org)[:/]([^/]+)\/([^/\s.]+?)(?:\.git)?$/);
-      const owner = m?.[1] ?? "";
-      const name = m?.[2] ?? "";
+      // Strip trailing slash and .git suffix, then grab the last two path segments
+      const clean = config.clone_url.trim().replace(/\.git$/, "").replace(/\/$/, "");
+      const parts = clean.split("/");
+      const name  = parts[parts.length - 1] ?? "";
+      const owner = parts[parts.length - 2] ?? "";
       return post<Repository>("/api/repositories", {
         platform,
         owner,

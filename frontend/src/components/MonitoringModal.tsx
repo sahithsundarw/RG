@@ -9,13 +9,12 @@ interface Props {
   onSaved: (repoId: string) => void;
 }
 
-type ModalPhase = "form" | "detecting" | "project_select" | "saving" | "success";
-
-interface DetectedProject { name: string; path: string; language: string; }
+type ModalPhase = "form" | "saving" | "success";
 
 export const MonitoringModal: React.FC<Props> = ({ open, onClose, onSaved }) => {
   const [url,          setUrl]          = useState("");
   const [secret,       setSecret]       = useState("");
+  const [scanPath,     setScanPath]     = useState("");
   const [prEnabled,    setPrEnabled]    = useState(true);
   const [pushEnabled,  setPushEnabled]  = useState(true);
   const [mergeEnabled, setMergeEnabled] = useState(false);
@@ -25,15 +24,10 @@ export const MonitoringModal: React.FC<Props> = ({ open, onClose, onSaved }) => 
   const [copied,       setCopied]       = useState(false);
   const [urlFocused,   setUrlFocused]   = useState(false);
   const [secFocused,   setSecFocused]   = useState(false);
-
-  // Project detection state
-  const [detectedProjects,  setDetectedProjects]  = useState<DetectedProject[]>([]);
-  const [selectedScanPath,  setSelectedScanPath]  = useState("");   // "" = entire repo
+  const [pathFocused,  setPathFocused]  = useState(false);
 
   const firstInputRef = useRef<HTMLInputElement>(null);
 
-  // Webhook endpoint: use the backend base URL so users get the correct address
-  // even when the frontend runs on a different port (e.g. Vite dev server).
   const webhookEndpoint = `${API_BASE_URL || window.location.origin}/webhooks/github`;
 
   useEffect(() => {
@@ -42,8 +36,9 @@ export const MonitoringModal: React.FC<Props> = ({ open, onClose, onSaved }) => 
       setError(null);
       setCopied(false);
       setPhase("form");
-      setDetectedProjects([]);
-      setSelectedScanPath("");
+      setUrl("");
+      setSecret("");
+      setScanPath("");
       return;
     }
     const timer = setTimeout(() => firstInputRef.current?.focus(), 50);
@@ -54,43 +49,16 @@ export const MonitoringModal: React.FC<Props> = ({ open, onClose, onSaved }) => 
 
   if (!open) return null;
 
-  // ── Step 1: detect projects then either save directly or go to project_select ─
-
   const handleSave = async () => {
-    if (!url.trim()) { setError("Repository URL is required."); return; }
+    const trimmedUrl = url.trim();
+    if (!trimmedUrl) { setError("Repository URL is required."); return; }
     setError(null);
-    setPhase("detecting");
-    setDetectedProjects([]);
-    setSelectedScanPath("");
-
-    let projects: DetectedProject[] = [];
-    try {
-      const res = await api.repositories.detectProjects(url.trim());
-      projects = res.projects;
-    } catch {
-      // Detection failed (private repo, network error, etc.) — skip to saving
-    }
-
-    if (projects.length > 0) {
-      setDetectedProjects(projects);
-      setPhase("project_select");
-    } else {
-      // No sub-projects detected: save immediately with entire-repo scope
-      await _doSave("");
-    }
-  };
-
-  const handleConfirmProjectAndSave = async () => {
-    await _doSave(selectedScanPath);
-  };
-
-  const _doSave = async (scanPath: string) => {
     setPhase("saving");
     try {
       const config: MonitoringConfig = {
-        clone_url:      url.trim(),
+        clone_url:      trimmedUrl,
         webhook_secret: secret.trim(),
-        scan_path:      scanPath,
+        scan_path:      scanPath.trim().replace(/^\/|\/$/g, ""), // strip leading/trailing slashes
         events: { pull_requests: prEnabled, pushes: pushEnabled, merges: mergeEnabled },
       };
       const repo = await api.monitoring.register(config);
@@ -146,15 +114,11 @@ export const MonitoringModal: React.FC<Props> = ({ open, onClose, onSaved }) => 
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
           <div>
             <h2 style={{ margin: "0 0 3px", fontSize: 16, fontWeight: 700, color: "var(--text-primary)" }}>
-              {phase === "success" ? "Repository Connected"
-               : phase === "project_select" ? "Choose Project Scope"
-               : "Connect Repository"}
+              {phase === "success" ? "Repository Connected" : "Connect Repository"}
             </h2>
             <p style={{ margin: 0, fontSize: 12, color: "var(--text-muted)" }}>
               {phase === "success"
-                ? "Now add the webhook URL to your GitHub repo settings"
-                : phase === "project_select"
-                ? "Select what to analyze on each webhook event"
+                ? "Add the webhook URL to your GitHub repo settings"
                 : "Configure webhook-based continuous monitoring"}
             </p>
           </div>
@@ -183,6 +147,8 @@ export const MonitoringModal: React.FC<Props> = ({ open, onClose, onSaved }) => 
               </svg>
               <span style={{ fontSize: 13, color: "var(--success)", fontWeight: 500 }}>Repository registered successfully</span>
             </div>
+
+            {/* Step 1: copy webhook URL */}
             <div style={{ marginBottom: 20 }}>
               <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase",
                 letterSpacing: "0.06em", marginBottom: 8 }}>Step 1 — Copy your webhook URL</div>
@@ -200,6 +166,8 @@ export const MonitoringModal: React.FC<Props> = ({ open, onClose, onSaved }) => 
                 </button>
               </div>
             </div>
+
+            {/* Step 2: GitHub instructions */}
             <div style={{ marginBottom: 24 }}>
               <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase",
                 letterSpacing: "0.06em", marginBottom: 10 }}>Step 2 — Add webhook in GitHub</div>
@@ -219,6 +187,7 @@ export const MonitoringModal: React.FC<Props> = ({ open, onClose, onSaved }) => 
                 </div>
               ))}
             </div>
+
             <button onClick={() => { onSaved(savedRepoId); onClose(); }}
               style={{ width: "100%", padding: "10px 16px", background: "var(--accent)",
                 color: "var(--accent-text)", border: "none", borderRadius: "var(--radius-md)",
@@ -231,86 +200,6 @@ export const MonitoringModal: React.FC<Props> = ({ open, onClose, onSaved }) => 
                 <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
               </svg>
             </button>
-          </div>
-        )}
-
-        {/* ══════════════ DETECTING ══════════════ */}
-        {phase === "detecting" && (
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, padding: "24px 0", animation: "fadeIn 0.2s ease" }}>
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round"
-              style={{ animation: "spin 1s linear infinite" }}>
-              <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-            </svg>
-            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>Detecting projects…</div>
-            <div style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "monospace", wordBreak: "break-all", textAlign: "center" }}>
-              {url}
-            </div>
-          </div>
-        )}
-
-        {/* ══════════════ PROJECT SELECT ══════════════ */}
-        {phase === "project_select" && (
-          <div style={{ animation: "fadeIn 0.2s ease" }}>
-            <div style={{ background: "var(--surface)", border: "1px solid var(--border)",
-              borderRadius: "var(--radius-lg)", overflow: "hidden", marginBottom: 16,
-              boxShadow: "var(--shadow-sm)" }}>
-              <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)",
-                fontSize: 11, fontWeight: 700, color: "var(--text-muted)",
-                textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                Project Scope
-              </div>
-              {[{ name: "Entire Repository", path: "", language: "" }, ...detectedProjects].map((proj, idx) => {
-                const isFirst = idx === 0;
-                const isSelected = selectedScanPath === proj.path;
-                return (
-                  <div key={proj.path || "__root__"}
-                    onClick={() => setSelectedScanPath(proj.path)}
-                    style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 16px",
-                      borderBottom: idx < detectedProjects.length ? "1px solid var(--border)" : "none",
-                      cursor: "pointer",
-                      background: isSelected ? "var(--accent-soft)" : "transparent",
-                      transition: "background 0.15s" }}
-                    onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.background = "var(--surface-hover)"; }}
-                    onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.background = "transparent"; }}
-                  >
-                    {/* Radio dot */}
-                    <div style={{ width: 16, height: 16, borderRadius: "50%", flexShrink: 0,
-                      border: `2px solid ${isSelected ? "var(--accent)" : "var(--border-strong)"}`,
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      transition: "border-color 0.15s" }}>
-                      {isSelected && <div style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)" }} />}
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 13, fontWeight: isFirst ? 500 : 600,
-                        color: isSelected ? "var(--accent)" : "var(--text-primary)",
-                        fontFamily: isFirst ? "inherit" : "monospace",
-                        transition: "color 0.15s" }}>
-                        {isFirst ? proj.name : `${proj.name}/`}
-                      </div>
-                      {proj.language && (
-                        <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 1 }}>{proj.language}</div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-              <button onClick={handleConfirmProjectAndSave}
-                style={{ flex: 1, padding: "10px 16px", background: "var(--accent)",
-                  color: "var(--accent-text)", border: "none", borderRadius: "var(--radius-md)",
-                  fontSize: 13, fontWeight: 600, cursor: "pointer", transition: "background 0.15s" }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = "var(--accent-hover)")}
-                onMouseLeave={(e) => (e.currentTarget.style.background = "var(--accent)")}>
-                {selectedScanPath ? `Monitor ${selectedScanPath}/` : "Monitor entire repository"}
-              </button>
-              <button onClick={() => setPhase("form")}
-                style={{ background: "transparent", border: "none", color: "var(--text-muted)",
-                  fontSize: 13, cursor: "pointer", padding: "10px 8px",
-                  textDecoration: "underline", textUnderlineOffset: 3 }}>
-                Back
-              </button>
-            </div>
           </div>
         )}
 
@@ -332,8 +221,8 @@ export const MonitoringModal: React.FC<Props> = ({ open, onClose, onSaved }) => 
                 onBlur={() => setUrlFocused(false)} />
             </div>
 
-            {/* Secret */}
-            <div style={{ marginBottom: 22 }}>
+            {/* Webhook Secret */}
+            <div style={{ marginBottom: 14 }}>
               <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "var(--text-muted)",
                 textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>
                 Webhook Secret
@@ -343,6 +232,20 @@ export const MonitoringModal: React.FC<Props> = ({ open, onClose, onSaved }) => 
                 style={inputStyle(secFocused)}
                 onFocus={() => setSecFocused(true)}
                 onBlur={() => setSecFocused(false)} />
+            </div>
+
+            {/* Scan path (optional) */}
+            <div style={{ marginBottom: 22 }}>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "var(--text-muted)",
+                textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>
+                Scan subdirectory
+                <span style={{ fontWeight: 400, textTransform: "none", marginLeft: 6 }}>— optional</span>
+              </label>
+              <input value={scanPath} onChange={(e) => setScanPath(e.target.value)}
+                placeholder="e.g. backend  (leave blank to scan entire repo)"
+                style={{ ...inputStyle(pathFocused), fontFamily: "'JetBrains Mono','Fira Code',monospace" }}
+                onFocus={() => setPathFocused(true)}
+                onBlur={() => setPathFocused(false)} />
             </div>
 
             {/* Event toggles */}
