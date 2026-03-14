@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link, useNavigate } from "react-router-dom";
 import { api, HealthDashboard, Finding, SseEvent } from "../api/client";
 import { HealthScoreCard } from "../components/HealthScoreCard";
 import { SubScoreRadar } from "../components/SubScoreRadar";
@@ -84,6 +84,7 @@ const DashboardSkeleton: React.FC = () => (
 
 export const Dashboard: React.FC = () => {
   const { repoId } = useParams<{ repoId: string }>();
+  const navigate = useNavigate();
   const [dashboard, setDashboard] = useState<HealthDashboard | null>(null);
   const [findings,  setFindings]  = useState<Finding[]>([]);
   const [loading,   setLoading]   = useState(true);
@@ -207,7 +208,7 @@ export const Dashboard: React.FC = () => {
         <line x1="12" y1="16" x2="12.01" y2="16" />
       </svg>
       <div style={{ color: "var(--danger)", fontSize: 14 }}>{error || "Failed to load dashboard"}</div>
-      <Link to="/repos" style={{ fontSize: 13, color: "var(--text-muted)" }}>← Back to repositories</Link>
+      <button onClick={() => navigate(-1)} style={{ fontSize: 13, color: "var(--text-muted)", background: "none", border: "none", cursor: "pointer" }}>← Back</button>
     </div>
   );
 
@@ -245,11 +246,11 @@ export const Dashboard: React.FC = () => {
         transition: "background 0.2s, border-color 0.2s",
       }}>
         <div style={{ display: "flex", align: "center", gap: 16, alignItems: "center" } as React.CSSProperties}>
-          <Link
-            to="/repos"
+          <button
+            onClick={() => navigate(-1)}
             style={{
+              background: "none", border: "none", cursor: "pointer", padding: 0,
               color: "var(--text-muted)",
-              textDecoration: "none",
               fontSize: 13,
               display: "inline-flex",
               alignItems: "center",
@@ -262,8 +263,8 @@ export const Dashboard: React.FC = () => {
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="15 18 9 12 15 6" />
             </svg>
-            All Repositories
-          </Link>
+            Back
+          </button>
           <span style={{ color: "var(--border)", fontSize: 16 }}>·</span>
           <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text-primary)" }}>
             {dashboard.repo_full_name}

@@ -108,6 +108,10 @@ style.textContent = `
     0% { background-position: -600px 0; }
     100% { background-position: 600px 0; }
   }
+  @keyframes pageSlide {
+    from { opacity: 0; transform: translateX(10px); }
+    to   { opacity: 1; transform: translateX(0); }
+  }
 
   .skeleton {
     background: linear-gradient(90deg, var(--border) 25%, var(--surface-hover) 50%, var(--border) 75%);

@@ -4,6 +4,7 @@ import { ThemeProvider } from "./context/ThemeContext";
 import { RepositoryList } from "./pages/RepositoryList";
 import { Dashboard } from "./pages/Dashboard";
 import { MonitoredRepos } from "./pages/MonitoredRepos";
+import { WorkspaceView } from "./pages/WorkspaceView";
 
 export const App: React.FC = () => (
   <ThemeProvider>
@@ -13,6 +14,7 @@ export const App: React.FC = () => (
           <Route path="/" element={<RepositoryList />} />
           <Route path="/repo/:repoId" element={<Dashboard />} />
           <Route path="/repos" element={<MonitoredRepos />} />
+          <Route path="/workspace" element={<WorkspaceView />} />
         </Routes>
       </div>
     </BrowserRouter>

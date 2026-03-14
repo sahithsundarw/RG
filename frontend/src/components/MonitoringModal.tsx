@@ -6,7 +6,7 @@ import { api, API_BASE_URL } from "../api/client";
 interface Props {
   open: boolean;
   onClose: () => void;
-  onSaved: (repoId: string) => void;
+  onSaved: (repoId: string, repoUrl: string) => void;
 }
 
 type ModalPhase = "form" | "saving" | "success";
@@ -188,7 +188,7 @@ export const MonitoringModal: React.FC<Props> = ({ open, onClose, onSaved }) => 
               ))}
             </div>
 
-            <button onClick={() => { onSaved(savedRepoId); onClose(); }}
+            <button onClick={() => { onSaved(savedRepoId, url.trim()); onClose(); }}
               style={{ width: "100%", padding: "10px 16px", background: "var(--accent)",
                 color: "var(--accent-text)", border: "none", borderRadius: "var(--radius-md)",
                 fontSize: 13, fontWeight: 600, cursor: "pointer",

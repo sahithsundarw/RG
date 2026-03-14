@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { api, DetectedProject, SseDoneEvent, SseEvent } from "../api/client";
 import { MonitoringModal } from "../components/MonitoringModal";
 import { useTheme } from "../context/ThemeContext";
+import { useWorkspace } from "../hooks/useWorkspace";
 
 type AuditPhase = "idle" | "detecting" | "project_select" | "scanning" | "complete" | "error";
 
@@ -99,6 +100,7 @@ export const RepositoryList: React.FC = () => {
   const navigate  = useNavigate();
   const esRef     = useRef<EventSource | null>(null);
   const { isDark } = useTheme();
+  const { saveRepo } = useWorkspace();
 
   const [phase,           setPhase]           = useState<AuditPhase>("idle");
   const [repoUrl,         setRepoUrl]         = useState("");
@@ -153,7 +155,12 @@ export const RepositoryList: React.FC = () => {
           es.close();
           esRef.current = null;
           api.scan.result(scan_id)
-            .then((r) => { if (r.repo_id) setSavedRepoId(r.repo_id); })
+            .then((r) => {
+              if (r.repo_id) {
+                setSavedRepoId(r.repo_id);
+                saveRepo(repoUrl.trim(), r.repo_id, "flash_audit", ev.health_score, ev.grade);
+              }
+            })
             .catch(() => {})
             .finally(() => setPhase("complete"));
         }
@@ -301,8 +308,8 @@ export const RepositoryList: React.FC = () => {
             </p>
           </div>
 
-          {/* Two-panel grid */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+          {/* Three-panel grid */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
 
             {/* ── Panel A: Flash Audit ── */}
             <div style={{
@@ -483,6 +490,91 @@ export const RepositoryList: React.FC = () => {
                 Connect Repository
               </button>
             </div>
+
+            {/* ── Panel C: My Repositories ── */}
+            <div
+              onClick={() => navigate("/workspace")}
+              style={{
+                background: "var(--surface)",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius-lg)",
+                padding: "28px 24px",
+                boxShadow: "var(--shadow-sm)",
+                display: "flex",
+                flexDirection: "column",
+                gap: 20,
+                cursor: "pointer",
+                transition: "border-color 0.2s, background 0.15s",
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLDivElement).style.borderColor = "var(--accent)";
+                (e.currentTarget as HTMLDivElement).style.background = "var(--surface-hover)";
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLDivElement).style.borderColor = "var(--border)";
+                (e.currentTarget as HTMLDivElement).style.background = "var(--surface)";
+              }}
+            >
+              <div style={{ flex: 1 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                  <span style={{
+                    fontSize: 10, fontWeight: 700,
+                    color: "var(--text-muted)",
+                    textTransform: "uppercase", letterSpacing: "0.1em",
+                    padding: "2px 8px", borderRadius: 20,
+                    background: "var(--surface-hover)",
+                    border: "1px solid var(--border)",
+                  }}>
+                    Workspace
+                  </span>
+                  {/* Folder icon */}
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                  </svg>
+                </div>
+                <h2 style={{ fontSize: 16, fontWeight: 700, color: "var(--text-primary)", margin: "0 0 6px", letterSpacing: "-0.02em" }}>
+                  My Repositories
+                </h2>
+                <p style={{ color: "var(--text-secondary)", fontSize: 13, margin: "0 0 18px", lineHeight: 1.55 }}>
+                  Revisit previously audited repos. Results are remembered across sessions.
+                </p>
+                <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                  {[
+                    "Auto-saved after every audit",
+                    "One-click to reopen any report",
+                    "Persists across browser sessions",
+                  ].map((feat) => (
+                    <div key={feat} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                      <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>{feat}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <button
+                onClick={(e) => { e.stopPropagation(); navigate("/workspace"); }}
+                style={{
+                  width: "100%", padding: "9px 16px",
+                  background: "transparent", color: "var(--accent)",
+                  border: "1px solid var(--accent)",
+                  borderRadius: "var(--radius-md)",
+                  fontSize: 13, fontWeight: 600, cursor: "pointer",
+                  transition: "background 0.15s",
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "var(--accent-soft)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                </svg>
+                View Workspace
+              </button>
+            </div>
+
           </div>
         </main>
       )}
@@ -1013,7 +1105,11 @@ export const RepositoryList: React.FC = () => {
       <MonitoringModal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
-        onSaved={(repoId) => { setModalOpen(false); navigate("/repos"); }}
+        onSaved={(repoId, monitoredUrl) => {
+          saveRepo(monitoredUrl, repoId, "monitoring");
+          setModalOpen(false);
+          navigate("/repos");
+        }}
       />
       </div>{/* end floating window */}
     </div>
