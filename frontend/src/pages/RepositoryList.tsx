@@ -185,7 +185,27 @@ export const RepositoryList: React.FC = () => {
   };
 
   return (
-    <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
+    <div style={{
+      minHeight: "100vh",
+      background: "var(--backdrop)",
+      display: "flex",
+      justifyContent: "center",
+      alignItems: "flex-start",
+      padding: "28px 24px",
+      boxSizing: "border-box",
+    }}>
+      {/* ── Floating window ── */}
+      <div style={{
+        width: "100%",
+        maxWidth: 980,
+        background: "var(--bg)",
+        borderRadius: 24,
+        overflow: "clip",
+        boxShadow: isDark
+          ? "0 32px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.04)"
+          : "0 32px 80px rgba(124,58,237,0.18), 0 0 0 1px rgba(190,184,255,0.5)",
+        minHeight: "calc(100vh - 56px)",
+      }}>
 
       {/* ── Header ── */}
       <header style={{
@@ -768,6 +788,7 @@ export const RepositoryList: React.FC = () => {
         onClose={() => setModalOpen(false)}
         onSaved={() => setModalOpen(false)}
       />
+      </div>{/* end floating window */}
     </div>
   );
 };

@@ -8,6 +8,7 @@ style.textContent = `
 
   :root {
     /* ── Light: "Soft Minimalist" ─────────────────────────────── */
+    --backdrop: #BEB8FF;
     --bg: #FFFFFF;
     --bg-alt: #F9F8FF;
     --surface: #FFFFFF;
@@ -15,8 +16,8 @@ style.textContent = `
     --border: #E9E7F3;
     --border-strong: #D1CAEE;
     --text-primary: #0F172A;
-    --text-secondary: #4B5563;
-    --text-muted: #9CA3AF;
+    --text-secondary: #374151;
+    --text-muted: #6B7280;
     /* Digital Lavender / Violet as primary interactive accent */
     --accent: #7C3AED;
     --accent-hover: #6D28D9;
@@ -46,16 +47,17 @@ style.textContent = `
 
   [data-theme='dark'] {
     /* ── Dark: "Tactical Command Center" ─────────────────────── */
-    --bg: #0B0E14;
-    --bg-alt: #0D1117;
+    --backdrop: #57486E;
+    --bg: #2D2435;
+    --bg-alt: #231A2C;
     /* Elevation through color: bg < surface < surface-hover */
-    --surface: #131C2E;
-    --surface-hover: #1A2845;
-    --border: #1E2D45;
-    --border-strong: #2D3F5A;
+    --surface: #3A2D4A;
+    --surface-hover: #483858;
+    --border: #4D3A62;
+    --border-strong: #5E4A74;
     --text-primary: #F1F5F9;
-    --text-secondary: #94A3B8;
-    --text-muted: #64748B;
+    --text-secondary: #C4B5D4;
+    --text-muted: #9E8EB5;
     /* Electric Purple as primary interactive accent */
     --accent: #8B5CF6;
     --accent-hover: #7C3AED;
@@ -87,7 +89,7 @@ style.textContent = `
   [data-theme='dark'] { color-scheme: dark; }
 
   body {
-    background: var(--bg);
+    background: var(--backdrop);
     color: var(--text-primary);
     font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     -webkit-font-smoothing: antialiased;
