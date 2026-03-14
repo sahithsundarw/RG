@@ -667,12 +667,37 @@ Be direct and technical. Reference specific files, function names, and CVE IDs f
 
 
 def _compute_health_score(findings: list[dict]) -> tuple[int, str]:
-    """Compute a 0–100 health score with grade."""
+    """Compute a 0–100 health score using per-category deduction + weighted composite.
+
+    Each finding deducts from its own category subscore (capped at 0 per category),
+    then the overall score is a weighted average of all category scores.  This
+    prevents a handful of issues in one category from collapsing the entire score
+    to zero — a repo with solid code quality but a few security issues should not
+    score 0.
+    """
     _PENALTIES = {"CRITICAL": 20, "HIGH": 10, "MEDIUM": 5, "LOW": 2, "INFO": 0}
-    score = 100
+    _CAT_TO_SUB = {
+        "SECURITY":   "security",
+        "DEPENDENCY":  "dependencies",
+        "CODE_SMELL":  "code_quality",
+        "BUG":         "code_quality",
+    }
+    _WEIGHTS = {
+        "code_quality":  0.25,
+        "security":      0.30,
+        "dependencies":  0.20,
+        "documentation": 0.15,
+        "test_coverage": 0.10,
+    }
+
+    sub = {k: 100.0 for k in _WEIGHTS}
     for f in findings:
-        score -= _PENALTIES.get(f.get("severity", "LOW"), 2)
-    score = max(0, min(100, score))
+        sub_key = _CAT_TO_SUB.get(f.get("category", "CODE_SMELL"), "code_quality")
+        penalty = _PENALTIES.get(f.get("severity", "LOW"), 2)
+        sub[sub_key] = max(0.0, sub[sub_key] - penalty)
+
+    score = sum(sub[k] * w for k, w in _WEIGHTS.items())
+    score = max(0, min(100, round(score)))
 
     if score >= 90:
         grade = "A"
