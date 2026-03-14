@@ -24,27 +24,39 @@ settings = get_settings()
 _chroma_client = None
 _collection = None
 
+try:
+    import chromadb as _chromadb
+    _CHROMA_AVAILABLE = True
+except ImportError:
+    _chromadb = None  # type: ignore
+    _CHROMA_AVAILABLE = False
+    logger.warning("chromadb not installed — vector search disabled (semantic similarity will return empty results)")
+
 
 def _get_client():
     global _chroma_client
+    if not _CHROMA_AVAILABLE:
+        return None
     if _chroma_client is None:
         try:
-            import chromadb
-            _chroma_client = chromadb.HttpClient(
+            _chroma_client = _chromadb.HttpClient(
                 host=settings.chroma_host,
                 port=settings.chroma_port,
             )
         except Exception as e:
-            logger.warning("ChromaDB not available: %s — using in-memory fallback", e)
-            import chromadb
-            _chroma_client = chromadb.Client()  # in-memory fallback
+            logger.warning("ChromaDB server not available: %s — using in-memory fallback", e)
+            _chroma_client = _chromadb.EphemeralClient()  # in-memory fallback
     return _chroma_client
 
 
 def _get_collection():
     global _collection
+    if not _CHROMA_AVAILABLE:
+        return None
     if _collection is None:
         client = _get_client()
+        if client is None:
+            return None
         _collection = client.get_or_create_collection(
             name=settings.chroma_collection_code,
             metadata={"hnsw:space": "cosine"},
@@ -75,6 +87,8 @@ def upsert_code_chunks(
         return 0
 
     collection = _get_collection()
+    if collection is None:
+        return 0
     ids, documents, metadatas = [], [], []
 
     for chunk in chunks:
@@ -117,6 +131,8 @@ def search_similar(
         List of SimilarChunk objects, sorted by similarity descending.
     """
     collection = _get_collection()
+    if collection is None:
+        return []
 
     try:
         results = collection.query(
@@ -156,6 +172,8 @@ def search_similar(
 def delete_repo_chunks(repo_id: str) -> int:
     """Remove all indexed chunks for a repository (e.g. on repo deregistration)."""
     collection = _get_collection()
+    if collection is None:
+        return 0
     try:
         existing = collection.get(where={"repo_id": repo_id})
         ids = existing.get("ids", [])

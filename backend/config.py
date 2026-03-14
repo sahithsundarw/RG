@@ -23,19 +23,11 @@ class Settings(BaseSettings):
     app_version: str = "1.0.0"
     debug: bool = False
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
-    environment: Literal["development", "staging", "production"] = "development"
+    environment: Literal["local", "development", "staging", "production"] = "local"
 
     # ── API Server ─────────────────────────────────────────────────────────────
     host: str = "0.0.0.0"
     port: int = 8000
-
-    # ── Database ───────────────────────────────────────────────────────────────
-    database_url: str = Field(
-        default="postgresql+asyncpg://postgres:postgres@localhost:5432/repoguardian",
-        description="Async PostgreSQL connection string",
-    )
-    database_pool_size: int = 10
-    database_max_overflow: int = 20
 
     # ── Redis ──────────────────────────────────────────────────────────────────
     redis_url: str = "redis://localhost:6379/0"
@@ -43,7 +35,7 @@ class Settings(BaseSettings):
     redis_consumer_group: str = "repoguardian-workers"
     redis_results_channel: str = "repoguardian:results"
     redis_state_prefix: str = "repoguardian:state:"
-    redis_stream_max_len: int = 10_000  # trim old entries
+    redis_stream_max_len: int = 10_000
 
     # ── ChromaDB ───────────────────────────────────────────────────────────────
     chroma_host: str = "localhost"
@@ -53,9 +45,8 @@ class Settings(BaseSettings):
     # ── OpenAI ─────────────────────────────────────────────────────────────────
     openai_api_key: str = Field(..., description="OpenAI API key")
     claude_model: str = "gpt-4o"
-    # Token budgets for agent calls
     claude_max_tokens_output: int = 4096
-    claude_temperature: float = 0.1  # Low for deterministic analysis
+    claude_temperature: float = 0.1
 
     # ── GitHub ─────────────────────────────────────────────────────────────────
     github_app_id: str = ""
@@ -79,9 +70,9 @@ class Settings(BaseSettings):
     # ── Agent Behaviour ────────────────────────────────────────────────────────
     agent_timeout_seconds: int = 90
     agent_max_retries: int = 3
-    agent_confidence_threshold: float = 0.65  # Drop findings below this
-    security_confidence_bias: float = 0.55    # Lower bar for security findings
-    self_consistency_runs: int = 3            # For CRITICAL findings
+    agent_confidence_threshold: float = 0.65
+    security_confidence_bias: float = 0.55
+    self_consistency_runs: int = 3
 
     # ── Health Score Weights ───────────────────────────────────────────────────
     health_weight_code_quality: float = 0.25
@@ -90,7 +81,6 @@ class Settings(BaseSettings):
     health_weight_documentation: float = 0.15
     health_weight_test_coverage: float = 0.10
 
-    # Penalty points per severity
     health_penalty_critical: float = 20.0
     health_penalty_high: float = 8.0
     health_penalty_medium: float = 3.0
@@ -103,8 +93,8 @@ class Settings(BaseSettings):
     hitl_auto_resolve_on_merge_severity: list[str] = ["MEDIUM", "LOW", "INFO"]
 
     # ── Worker ─────────────────────────────────────────────────────────────────
-    worker_concurrency: int = 4          # parallel analysis tasks
-    worker_poll_interval_ms: int = 100   # Redis stream polling interval
+    worker_concurrency: int = 4
+    worker_poll_interval_ms: int = 100
 
     # ── Rate Limiting ──────────────────────────────────────────────────────────
     max_reviews_per_repo_daily: int = 50
@@ -116,8 +106,6 @@ class Settings(BaseSettings):
     @field_validator("health_weight_code_quality")
     @classmethod
     def weights_must_sum_to_one(cls, v: float, info) -> float:  # noqa: N805
-        # Validated lazily at runtime — pydantic validators run per-field,
-        # so we do a full check in the property below.
         return v
 
     @property
@@ -134,5 +122,5 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    """Return cached settings singleton.  Call get_settings() anywhere."""
+    """Return cached settings singleton."""
     return Settings()

@@ -1,20 +1,11 @@
 from backend.models.database import (
-    AuditLog,
-    Base,
     EventType,
-    Finding,
     FindingCategory,
     FindingStatus,
     HealthGrade,
-    HealthRecord,
     HITLAction,
-    HITLState,
     Platform,
-    Repository,
     Severity,
-    drop_db,
-    get_db,
-    init_db,
 )
 from backend.models.schemas import (
     AgentFinding,
@@ -40,11 +31,9 @@ from backend.models.schemas import (
 )
 
 __all__ = [
-    # database
-    "Base", "Repository", "HealthRecord", "Finding", "HITLState", "AuditLog",
+    # enums
     "Platform", "EventType", "Severity", "FindingCategory", "FindingStatus",
     "HealthGrade", "HITLAction",
-    "get_db", "init_db", "drop_db",
     # schemas
     "WebhookEvent", "ContextPackage", "DiffHunk", "ChangedSymbol",
     "CallGraphEdge", "SimilarChunk", "FileContent",

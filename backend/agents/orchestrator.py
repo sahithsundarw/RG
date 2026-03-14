@@ -19,11 +19,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import uuid
-from concurrent.futures import ThreadPoolExecutor
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
+import backend.services.storage as storage
 from backend.agents.code_quality import CodeQualityAgent
 from backend.agents.context_retrieval import ContextRetrievalAgent
 from backend.agents.dependency_auditor import DependencyAuditorAgent
@@ -63,7 +60,6 @@ class Orchestrator:
         github_client: GitHubAPIClient,
         state_store: StateStore,
     ) -> None:
-        # Agents
         self._context_agent = ContextRetrievalAgent()
         self._pr_review_agent = PRReviewAgent()
         self._security_agent = SecurityScannerAgent()
@@ -76,10 +72,10 @@ class Orchestrator:
 
         self._state = state_store
 
-    async def process_event(self, event: WebhookEvent, db: AsyncSession) -> None:
+    async def process_event(self, event: WebhookEvent) -> None:
         """
         Main entry point: process one webhook event end-to-end.
-        This is called by the background worker for each event.
+        Called by the background worker for each event.
         """
         logger.info(
             "[orchestrator] Processing %s event for %s PR#%s",
@@ -94,16 +90,16 @@ class Orchestrator:
             )
             return
 
-        # ── Step 2: Resolve repo_id from DB ───────────────────────────────────
-        repo_id = await self._resolve_repo_id(event.repo_full_name, db)
+        # ── Step 2: Resolve repo_id from storage ──────────────────────────────
+        repo_id = self._resolve_repo_id(event.repo_full_name)
         if not repo_id:
             logger.error("[orchestrator] Repo %s not registered — skipping", event.repo_full_name)
             return
 
-        # ── Step 3: Context assembly (sequential, blocks all further steps) ───
+        # ── Step 3: Context assembly ───────────────────────────────────────────
         try:
             context = await asyncio.wait_for(
-                self._context_agent.run(event, str(repo_id)),
+                self._context_agent.run(event, repo_id),
                 timeout=30.0,
             )
         except asyncio.TimeoutError:
@@ -114,15 +110,13 @@ class Orchestrator:
             return
 
         # ── Step 4: Parallel specialist agent dispatch ─────────────────────────
-        pr_review, security, quality, dependency, doc = await self._run_agents_parallel(
-            context, event
-        )
+        pr_review, sec, quality, dependency, doc = await self._run_agents_parallel(context, event)
 
         # ── Step 5: Synthesis ──────────────────────────────────────────────────
         report = self._synthesizer.synthesize(
             context=context,
             pr_review=pr_review,
-            security=security,
+            security=sec,
             quality=quality,
             dependency=dependency,
             doc=doc,
@@ -133,20 +127,19 @@ class Orchestrator:
             len(report.findings), report.overall_verdict,
         )
 
-        # ── Step 6: HITL Gateway (post to GitHub, persist to DB) ──────────────
+        # ── Step 6: HITL Gateway ───────────────────────────────────────────────
         if event.pr_number and event.event_type in (EventType.PR_OPEN, EventType.PR_UPDATE):
             try:
-                await self._hitl.post_review(event, report, db)
+                await self._hitl.post_review(event, report)
             except Exception as e:
                 logger.error("[orchestrator] HITL gateway error: %s", e)
 
-        # ── Step 7: Health score update (fire-and-forget) ──────────────────────
+        # ── Step 7: Health score update ────────────────────────────────────────
         try:
             await self._health.update_health_score(
                 repo_id=repo_id,
                 report=report,
                 event_label=f"{event.event_type.value}:{event.pr_number or 'audit'}",
-                db=db,
             )
         except Exception as e:
             logger.error("[orchestrator] Health aggregator error: %s", e)
@@ -169,15 +162,9 @@ class Orchestrator:
         DependencyReport | None,
         DocumentationReport | None,
     ]:
-        """
-        Run all specialist agents concurrently.
-        Each agent has an individual timeout; failures are isolated.
-        The pipeline continues with partial results if any agent fails.
-        """
         timeout = settings.agent_timeout_seconds
 
         async def run_safe(coro, agent_name: str):
-            """Run a coroutine with timeout and error isolation."""
             try:
                 return await asyncio.wait_for(coro, timeout=timeout)
             except asyncio.TimeoutError:
@@ -187,7 +174,6 @@ class Orchestrator:
                 logger.error("[orchestrator] Agent '%s' failed: %s", agent_name, e)
                 return None
 
-        # Determine which agents to run based on event type
         is_pr_event = event.event_type in (EventType.PR_OPEN, EventType.PR_UPDATE)
         has_manifests = bool(context.dependency_manifests)
 
@@ -211,13 +197,8 @@ class Orchestrator:
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 
-    async def _resolve_repo_id(
-        self, full_name: str, db: AsyncSession
-    ) -> uuid.UUID | None:
-        from sqlalchemy import select
-        from backend.models.database import Repository
-
-        stmt = select(Repository.id).where(Repository.full_name == full_name)
-        result = await db.execute(stmt)
-        row = result.scalar_one_or_none()
-        return row
+    def _resolve_repo_id(self, full_name: str) -> str | None:
+        repo = storage.get_repo_by_full_name(full_name)
+        if repo:
+            return repo["id"]
+        return None

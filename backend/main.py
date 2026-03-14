@@ -2,8 +2,7 @@
 RepoGuardian FastAPI application.
 
 Startup:
-  - Initialises database tables
-  - Connects to Redis
+  - Connects to Redis (optional — warns if unavailable)
   - Mounts all routers
 
 The background worker (tasks/worker.py) runs as a separate process.
@@ -21,7 +20,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from backend.config import get_settings
-from backend.models.database import init_db
 from backend.routers import (
     findings_router,
     health_router,
@@ -61,11 +59,7 @@ async def lifespan(app: FastAPI):
     """Startup and shutdown tasks."""
     logger.info("Starting %s v%s", settings.app_name, settings.app_version)
 
-    # Initialise database
-    await init_db()
-    logger.info("Database initialised")
-
-    # Connect to Redis
+    # Connect to Redis (optional — system degrades gracefully without it)
     try:
         redis = await get_redis()
         await redis.ping()
@@ -75,8 +69,6 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Cleanup
-    from backend.services.redis_service import close_redis
     await close_redis()
     logger.info("Shutdown complete")
 
@@ -92,7 +84,7 @@ app = FastAPI(
         "monitors repository health, and provides actionable developer feedback."
     ),
     lifespan=lifespan,
-    docs_url="/docs" if settings.debug else None,
+    docs_url="/docs",
     redoc_url="/redoc",
 )
 
@@ -123,8 +115,14 @@ async def root():
         "service": settings.app_name,
         "version": settings.app_version,
         "status": "running",
-        "docs": "/redoc",
+        "docs": "/docs",
     }
+
+
+@app.get("/health", include_in_schema=False)
+async def health_check():
+    """Health check endpoint required by Render."""
+    return {"status": "ok"}
 
 
 @app.get("/ping", include_in_schema=False)
@@ -135,19 +133,9 @@ async def ping():
 
 @app.get("/ready", include_in_schema=False)
 async def ready():
-    """Readiness probe — checks DB and Redis."""
-    checks = {}
+    """Readiness probe — checks Redis."""
+    checks: dict = {}
 
-    # DB check
-    try:
-        from backend.models.database import AsyncSessionLocal
-        async with AsyncSessionLocal() as db:
-            await db.execute(__import__("sqlalchemy").text("SELECT 1"))
-        checks["database"] = "ok"
-    except Exception as e:
-        checks["database"] = f"error: {e}"
-
-    # Redis check
     try:
         redis = await get_redis()
         await redis.ping()

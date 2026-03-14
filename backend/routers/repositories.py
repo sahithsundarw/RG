@@ -10,127 +10,100 @@ DELETE /api/repositories/{repo_id} — deactivate a repo
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, HTTPException, status
 
-from backend.models.database import Repository, get_db
+import backend.services.storage as storage
 from backend.models.schemas import RepositoryCreate, RepositoryResponse
 
 router = APIRouter(prefix="/api/repositories", tags=["repositories"])
 
 
 @router.post("", response_model=RepositoryResponse, status_code=status.HTTP_201_CREATED)
-async def register_repository(
-    body: RepositoryCreate,
-    db: AsyncSession = Depends(get_db),
-) -> RepositoryResponse:
+async def register_repository(body: RepositoryCreate) -> RepositoryResponse:
     """Register a new repository for monitoring."""
     full_name = f"{body.owner}/{body.name}"
 
-    # Check for duplicates
-    stmt = select(Repository).where(
-        Repository.platform == body.platform,
-        Repository.full_name == full_name,
-    )
-    existing = (await db.execute(stmt)).scalar_one_or_none()
+    existing = storage.get_repo_by_platform_name(body.platform.value, full_name)
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Repository {full_name} is already registered.",
         )
 
-    repo = Repository(
+    repo_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    repo = {
+        "id": repo_id,
+        "platform": body.platform.value,
+        "owner": body.owner,
+        "name": body.name,
+        "full_name": full_name,
+        "clone_url": body.clone_url,
+        "default_branch": body.default_branch,
+        "primary_language": None,
+        "is_active": True,
+        "config": body.config,
+        "created_at": now,
+        "updated_at": now,
+    }
+    storage.save_repo(repo_id, repo)
+
+    return RepositoryResponse(
+        id=repo_id,
         platform=body.platform,
-        owner=body.owner,
-        name=body.name,
         full_name=full_name,
         clone_url=body.clone_url,
         default_branch=body.default_branch,
-        config=body.config,
-    )
-    db.add(repo)
-    await db.commit()
-    await db.refresh(repo)
-
-    return RepositoryResponse(
-        id=str(repo.id),
-        platform=repo.platform,
-        full_name=repo.full_name,
-        clone_url=repo.clone_url,
-        default_branch=repo.default_branch,
-        primary_language=repo.primary_language,
-        is_active=repo.is_active,
-        created_at=repo.created_at,
+        primary_language=None,
+        is_active=True,
+        created_at=now,
     )
 
 
 @router.get("", response_model=list[RepositoryResponse])
-async def list_repositories(
-    db: AsyncSession = Depends(get_db),
-) -> list[RepositoryResponse]:
+async def list_repositories() -> list[RepositoryResponse]:
     """List all registered repositories."""
-    result = await db.execute(select(Repository).where(Repository.is_active == True))
-    repos = result.scalars().all()
+    repos = storage.list_repos(active_only=True)
     return [
         RepositoryResponse(
-            id=str(r.id),
-            platform=r.platform,
-            full_name=r.full_name,
-            clone_url=r.clone_url,
-            default_branch=r.default_branch,
-            primary_language=r.primary_language,
-            is_active=r.is_active,
-            created_at=r.created_at,
+            id=r["id"],
+            platform=r["platform"],
+            full_name=r["full_name"],
+            clone_url=r["clone_url"],
+            default_branch=r["default_branch"],
+            primary_language=r.get("primary_language"),
+            is_active=r.get("is_active", True),
+            created_at=r["created_at"],
         )
         for r in repos
     ]
 
 
 @router.get("/{repo_id}", response_model=RepositoryResponse)
-async def get_repository(
-    repo_id: str,
-    db: AsyncSession = Depends(get_db),
-) -> RepositoryResponse:
+async def get_repository(repo_id: str) -> RepositoryResponse:
     """Get details for a specific repository."""
-    try:
-        rid = uuid.UUID(repo_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid repo_id")
-
-    result = await db.execute(select(Repository).where(Repository.id == rid))
-    repo = result.scalar_one_or_none()
+    repo = storage.get_repo(repo_id)
     if not repo:
         raise HTTPException(status_code=404, detail="Repository not found")
 
     return RepositoryResponse(
-        id=str(repo.id),
-        platform=repo.platform,
-        full_name=repo.full_name,
-        clone_url=repo.clone_url,
-        default_branch=repo.default_branch,
-        primary_language=repo.primary_language,
-        is_active=repo.is_active,
-        created_at=repo.created_at,
+        id=repo["id"],
+        platform=repo["platform"],
+        full_name=repo["full_name"],
+        clone_url=repo["clone_url"],
+        default_branch=repo["default_branch"],
+        primary_language=repo.get("primary_language"),
+        is_active=repo.get("is_active", True),
+        created_at=repo["created_at"],
     )
 
 
 @router.delete("/{repo_id}", status_code=status.HTTP_200_OK)
-async def deactivate_repository(
-    repo_id: str,
-    db: AsyncSession = Depends(get_db),
-) -> None:
+async def deactivate_repository(repo_id: str) -> dict:
     """Soft-delete (deactivate) a repository."""
-    try:
-        rid = uuid.UUID(repo_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid repo_id")
-
-    result = await db.execute(select(Repository).where(Repository.id == rid))
-    repo = result.scalar_one_or_none()
-    if not repo:
+    ok = storage.deactivate_repo(repo_id)
+    if not ok:
         raise HTTPException(status_code=404, detail="Repository not found")
-
-    repo.is_active = False
-    await db.commit()
+    return {"status": "deactivated"}
