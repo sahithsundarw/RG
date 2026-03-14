@@ -1,10 +1,10 @@
 import React, { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, SseDoneEvent, SseEvent } from "../api/client";
+import { api, DetectedProject, SseDoneEvent, SseEvent } from "../api/client";
 import { MonitoringModal } from "../components/MonitoringModal";
 import { useTheme } from "../context/ThemeContext";
 
-type AuditPhase = "idle" | "scanning" | "complete" | "error";
+type AuditPhase = "idle" | "detecting" | "project_select" | "scanning" | "complete" | "error";
 
 const PROGRESS_MAP: [string, number][] = [
   ["synthesis", 90], ["ai", 90],
@@ -100,15 +100,17 @@ export const RepositoryList: React.FC = () => {
   const esRef     = useRef<EventSource | null>(null);
   const { isDark } = useTheme();
 
-  const [phase,        setPhase]        = useState<AuditPhase>("idle");
-  const [repoUrl,      setRepoUrl]      = useState("");
-  const [progress,     setProgress]     = useState(0);
-  const [statusText,   setStatusText]   = useState("Initializing...");
-  const [result,       setResult]       = useState<SseDoneEvent | null>(null);
-  const [savedRepoId,  setSavedRepoId]  = useState<string | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [modalOpen,    setModalOpen]    = useState(false);
-  const [urlFocused,   setUrlFocused]   = useState(false);
+  const [phase,           setPhase]           = useState<AuditPhase>("idle");
+  const [repoUrl,         setRepoUrl]         = useState("");
+  const [progress,        setProgress]        = useState(0);
+  const [statusText,      setStatusText]      = useState("Initializing...");
+  const [result,          setResult]          = useState<SseDoneEvent | null>(null);
+  const [savedRepoId,     setSavedRepoId]     = useState<string | null>(null);
+  const [errorMessage,    setErrorMessage]    = useState<string | null>(null);
+  const [modalOpen,       setModalOpen]       = useState(false);
+  const [urlFocused,      setUrlFocused]      = useState(false);
+  const [detectedProjects, setDetectedProjects] = useState<DetectedProject[]>([]);
+  const [selectedScanPath, setSelectedScanPath] = useState<string>("");  // "" = entire repo
 
   const resetToIdle = () => {
     esRef.current?.close();
@@ -119,16 +121,17 @@ export const RepositoryList: React.FC = () => {
     setResult(null);
     setSavedRepoId(null);
     setErrorMessage(null);
+    setDetectedProjects([]);
+    setSelectedScanPath("");
   };
 
-  const handleRunAudit = async () => {
-    if (!repoUrl.trim()) return;
+  const startScan = async (scanPath: string) => {
     setPhase("scanning");
     setProgress(5);
     setStatusText("Initializing...");
 
     try {
-      const { scan_id } = await api.scan.start(repoUrl.trim());
+      const { scan_id } = await api.scan.start(repoUrl.trim(), scanPath);
       const es = new EventSource(api.scan.streamUrl(scan_id));
       esRef.current = es;
 
@@ -173,6 +176,31 @@ export const RepositoryList: React.FC = () => {
       setErrorMessage(String(e));
       setPhase("error");
     }
+  };
+
+  const handleRunAudit = async () => {
+    if (!repoUrl.trim()) return;
+    setPhase("detecting");
+    setDetectedProjects([]);
+    setSelectedScanPath("");
+
+    try {
+      const { projects } = await api.repositories.detectProjects(repoUrl.trim());
+      if (projects.length > 0) {
+        setDetectedProjects(projects);
+        setPhase("project_select");
+      } else {
+        // No sub-projects detected — scan the whole repo immediately
+        await startScan("");
+      }
+    } catch {
+      // If detection fails (e.g. private repo, network error), fall back to full scan
+      await startScan("");
+    }
+  };
+
+  const handleProjectSelectAndScan = async () => {
+    await startScan(selectedScanPath);
   };
 
   const completedSteps = getCompletedSteps(progress);
@@ -455,6 +483,205 @@ export const RepositoryList: React.FC = () => {
                 Connect Repository
               </button>
             </div>
+          </div>
+        </main>
+      )}
+
+      {/* ══════════════════════════ DETECTING ══════════════════════════ */}
+      {phase === "detecting" && (
+        <main style={{
+          maxWidth: 580,
+          margin: "0 auto",
+          padding: "64px 24px 60px",
+          animation: "fadeIn 0.3s ease",
+        }}>
+          <div style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 16,
+            padding: "40px 0",
+          }}>
+            {/* Spinner */}
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round"
+              style={{ animation: "spin 1s linear infinite" }}>
+              <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+            </svg>
+            <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text-primary)" }}>
+              Detecting projects…
+            </div>
+            <div style={{
+              fontSize: 12,
+              color: "var(--text-muted)",
+              fontFamily: "'JetBrains Mono','Fira Code',monospace",
+              wordBreak: "break-all",
+              textAlign: "center",
+            }}>
+              {repoUrl}
+            </div>
+          </div>
+        </main>
+      )}
+
+      {/* ══════════════════════════ PROJECT SELECT ══════════════════════════ */}
+      {phase === "project_select" && (
+        <main style={{
+          maxWidth: 580,
+          margin: "0 auto",
+          padding: "64px 24px 60px",
+          animation: "fadeIn 0.3s ease",
+        }}>
+          {/* Repo label */}
+          <div style={{ marginBottom: 24 }}>
+            <div style={{
+              fontSize: 10,
+              fontWeight: 700,
+              color: "var(--text-muted)",
+              textTransform: "uppercase",
+              letterSpacing: "0.1em",
+              marginBottom: 6,
+            }}>
+              Repository
+            </div>
+            <div style={{
+              fontSize: 12,
+              color: "var(--text-primary)",
+              fontFamily: "'JetBrains Mono','Fira Code',monospace",
+              wordBreak: "break-all",
+            }}>
+              {repoUrl}
+            </div>
+          </div>
+
+          {/* Project picker */}
+          <div style={{
+            background: "var(--surface)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius-lg)",
+            overflow: "hidden",
+            marginBottom: 16,
+            boxShadow: "var(--shadow-sm)",
+          }}>
+            <div style={{
+              padding: "14px 20px",
+              borderBottom: "1px solid var(--border)",
+              fontSize: 11,
+              fontWeight: 700,
+              color: "var(--text-muted)",
+              textTransform: "uppercase",
+              letterSpacing: "0.08em",
+            }}>
+              Detected Projects
+            </div>
+
+            {/* Entire repo option */}
+            {[{ name: "Entire repository", path: "", language: "" }, ...detectedProjects].map((proj, idx) => {
+              const isFirst = idx === 0;
+              const isSelected = selectedScanPath === proj.path;
+              return (
+                <div
+                  key={proj.path || "__root__"}
+                  onClick={() => setSelectedScanPath(proj.path)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    padding: "12px 20px",
+                    borderBottom: idx < detectedProjects.length ? "1px solid var(--border)" : "none",
+                    cursor: "pointer",
+                    background: isSelected ? "var(--accent-soft)" : "transparent",
+                    transition: "background 0.15s",
+                  }}
+                  onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.background = "var(--surface-hover)"; }}
+                  onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.background = "transparent"; }}
+                >
+                  {/* Radio dot */}
+                  <div style={{
+                    width: 16,
+                    height: 16,
+                    borderRadius: "50%",
+                    border: `2px solid ${isSelected ? "var(--accent)" : "var(--border-strong)"}`,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexShrink: 0,
+                    transition: "border-color 0.15s",
+                  }}>
+                    {isSelected && (
+                      <div style={{
+                        width: 6,
+                        height: 6,
+                        borderRadius: "50%",
+                        background: "var(--accent)",
+                      }} />
+                    )}
+                  </div>
+
+                  <div style={{ flex: 1 }}>
+                    <div style={{
+                      fontSize: 13,
+                      fontWeight: isFirst ? 500 : 600,
+                      color: isSelected ? "var(--accent)" : "var(--text-primary)",
+                      fontFamily: isFirst ? "inherit" : "'JetBrains Mono','Fira Code',monospace",
+                      transition: "color 0.15s",
+                    }}>
+                      {isFirst ? proj.name : `${proj.name}/`}
+                    </div>
+                    {proj.language && (
+                      <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 1 }}>
+                        {proj.language}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Actions */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <button
+              onClick={handleProjectSelectAndScan}
+              style={{
+                padding: "10px 16px",
+                background: "var(--accent)",
+                color: "var(--accent-text)",
+                border: "none",
+                borderRadius: "var(--radius-md)",
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 6,
+                transition: "background 0.15s",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "var(--accent-hover)")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "var(--accent)")}
+            >
+              {selectedScanPath
+                ? `Analyze ${selectedScanPath}/`
+                : "Analyze entire repository"}
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="5" y1="12" x2="19" y2="12" />
+                <polyline points="12 5 19 12 12 19" />
+              </svg>
+            </button>
+            <button
+              onClick={resetToIdle}
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "var(--text-muted)",
+                fontSize: 13,
+                cursor: "pointer",
+                padding: "6px 0",
+                textAlign: "left",
+              }}
+            >
+              ← Change URL
+            </button>
           </div>
         </main>
       )}

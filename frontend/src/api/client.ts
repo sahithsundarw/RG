@@ -97,6 +97,20 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 
 // ── Scan types ────────────────────────────────────────────────────────────────
 
+// ── Project detection types ───────────────────────────────────────────────────
+
+export interface DetectedProject {
+  name: string;
+  path: string;
+  language: string;
+}
+
+export interface DetectProjectsResponse {
+  projects: DetectedProject[];
+}
+
+// ── Scan types ────────────────────────────────────────────────────────────────
+
 export interface ScanStartResponse {
   scan_id: string;
   status: "queued";
@@ -151,6 +165,8 @@ export const api = {
     list: () => get<Repository[]>("/api/repositories"),
     get: (id: string) => get<Repository>(`/api/repositories/${id}`),
     create: (data: Partial<Repository>) => post<Repository>("/api/repositories", data),
+    detectProjects: (repoUrl: string) =>
+      post<DetectProjectsResponse>("/api/repositories/detect-projects", { repo_url: repoUrl }),
   },
   health: {
     dashboard: (repoId: string) => get<HealthDashboard>(`/api/health/${repoId}`),
@@ -172,7 +188,8 @@ export const api = {
       post(`/api/hitl/${findingId}/action`, { action, reason_code: reasonCode }),
   },
   scan: {
-    start: (repoUrl: string) => post<ScanStartResponse>("/api/scan", { repo_url: repoUrl }),
+    start: (repoUrl: string, scanPath?: string) =>
+      post<ScanStartResponse>("/api/scan", { repo_url: repoUrl, scan_path: scanPath ?? "" }),
     result: (scanId: string) => get<ScanResult>(`/api/scan/${scanId}/result`),
     streamUrl: (scanId: string) => `${BASE_URL}/api/scan/${scanId}/stream`,
   },

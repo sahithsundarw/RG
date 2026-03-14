@@ -40,6 +40,7 @@ _scans: dict[str, dict] = {}
 
 class ScanRequest(BaseModel):
     repo_url: str
+    scan_path: str = ""   # optional sub-directory to analyse (e.g. "backend")
 
 
 class ScanStartResponse(BaseModel):
@@ -56,7 +57,7 @@ async def start_scan(body: ScanRequest, background_tasks: BackgroundTasks) -> Sc
     scan_id = str(uuid.uuid4())
     queue: asyncio.Queue = asyncio.Queue()
     _scans[scan_id] = {"status": "queued", "queue": queue, "result": None, "error": None}
-    background_tasks.add_task(_run_flash_audit, scan_id, body.repo_url, queue)
+    background_tasks.add_task(_run_flash_audit, scan_id, body.repo_url, queue, body.scan_path or "")
     return ScanStartResponse(scan_id=scan_id, status="queued")
 
 
@@ -173,7 +174,7 @@ def _parse_github_url(url: str) -> tuple[str, str]:
     return m.group(1), m.group(2)
 
 
-async def _run_flash_audit(scan_id: str, repo_url: str, queue: asyncio.Queue) -> None:
+async def _run_flash_audit(scan_id: str, repo_url: str, queue: asyncio.Queue, scan_path: str = "") -> None:
     scan = _scans[scan_id]
     scan["status"] = "running"
 
@@ -190,7 +191,8 @@ async def _run_flash_audit(scan_id: str, repo_url: str, queue: asyncio.Queue) ->
             return
 
         repo_full_name = f"{owner}/{repo_name}"
-        await emit(f"Starting flash audit for {repo_full_name}")
+        scan_label = f"{repo_full_name}/{scan_path}" if scan_path else repo_full_name
+        await emit(f"Starting flash audit for {scan_label}")
 
         with tempfile.TemporaryDirectory() as tmpdir:
             # ── Step 1: Shallow clone ──────────────────────────────────────────
@@ -213,24 +215,30 @@ async def _run_flash_audit(scan_id: str, repo_url: str, queue: asyncio.Queue) ->
                 scan.update(status="error", error="Clone timed out")
                 return
 
-            await emit("Repository cloned. Running static analysis...")
+            # Resolve the scan root — sub-directory if scan_path is set
+            scan_root = str(Path(tmpdir) / scan_path) if scan_path else tmpdir
+
+            if scan_path:
+                await emit(f"Repository cloned. Scanning project: {scan_path}/")
+            else:
+                await emit("Repository cloned. Running static analysis...")
 
             # ── Step 2: Layer 1 — Static analysis tools ────────────────────────
             await emit("Security Scan Agent running (bandit)...")
-            security_findings = await _run_bandit(tmpdir)
+            security_findings = await _run_bandit(scan_root)
             await emit(f"Security scan complete — {len(security_findings)} issues found")
 
             await emit("Code Quality Agent running (radon)...")
-            quality_findings = await _run_radon(tmpdir)
+            quality_findings = await _run_radon(scan_root)
             await emit(f"Code quality analysis complete — {len(quality_findings)} issues found")
 
             await emit("Dependency Auditor running (OSV)...")
-            dep_findings = await _run_dep_audit(tmpdir)
+            dep_findings = await _run_dep_audit(scan_root)
             await emit(f"Dependency audit complete — {len(dep_findings)} vulnerabilities found")
 
             # ── Step 3: Layer 2 — LLM reasoning ───────────────────────────────
             await emit("Synthesizing findings with AI...")
-            summary = await _llm_summarize(repo_full_name, security_findings, quality_findings, dep_findings)
+            summary = await _llm_summarize(scan_label, security_findings, quality_findings, dep_findings)
             await emit("AI synthesis complete")
 
             # ── Step 4: Health score ───────────────────────────────────────────
@@ -245,6 +253,7 @@ async def _run_flash_audit(scan_id: str, repo_url: str, queue: asyncio.Queue) ->
                 grade=grade,
                 findings=all_findings,
                 summary=summary,
+                scan_path=scan_path,
             )
 
             result = {
@@ -254,6 +263,7 @@ async def _run_flash_audit(scan_id: str, repo_url: str, queue: asyncio.Queue) ->
                 "grade": grade,
                 "summary": summary,
                 "findings": all_findings,
+                "scan_path": scan_path,
                 "counts": {
                     "security": len(security_findings),
                     "quality": len(quality_findings),
@@ -480,6 +490,7 @@ def _persist_scan_results(
     grade: str,
     findings: list[dict],
     summary: str,
+    scan_path: str = "",
 ) -> str:
     """Save flash-audit results to in-memory storage so the dashboard can read them.
 
@@ -576,7 +587,7 @@ def _persist_scan_results(
         "info_count": sum(1 for f in findings if f.get("severity") == "INFO"),
         "trigger_event": "flash_audit",
         "trigger_pr_number": None,
-        "metadata": {"verdict": "flash_audit", "token_cost": 0, "files_reviewed": 0, "summary": summary},
+        "metadata": {"verdict": "flash_audit", "token_cost": 0, "files_reviewed": 0, "summary": summary, "scan_path": scan_path},
     })
 
     # Save audit log entry
@@ -586,7 +597,7 @@ def _persist_scan_results(
         "timestamp": now,
         "event_type": "flash_audit",
         "actor": "RepoGuardian",
-        "metadata": {"health_score": health_score, "grade": grade, "total_findings": len(findings)},
+        "metadata": {"health_score": health_score, "grade": grade, "total_findings": len(findings), "scan_path": scan_path},
     })
 
     logger.info("[scan] Persisted %d findings for repo %s (id=%s)", len(findings), repo_full_name, repo_id)

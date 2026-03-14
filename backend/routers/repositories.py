@@ -1,23 +1,47 @@
 """
 Repository management router.
 
-POST   /api/repositories          — register a new repository
-GET    /api/repositories          — list all registered repos
-GET    /api/repositories/{repo_id} — get repo details
-DELETE /api/repositories/{repo_id} — deactivate a repo
+POST   /api/repositories                  — register a new repository
+GET    /api/repositories                  — list all registered repos
+GET    /api/repositories/{repo_id}        — get repo details
+DELETE /api/repositories/{repo_id}        — deactivate a repo
+POST   /api/repositories/detect-projects  — detect sub-projects in a repo
 """
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import tempfile
 import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel
 
 import backend.services.storage as storage
 from backend.models.schemas import RepositoryCreate, RepositoryResponse
+from backend.utils.project_detector import detect_projects
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/repositories", tags=["repositories"])
+
+
+# ── Detect-projects schemas ────────────────────────────────────────────────────
+
+class DetectProjectsRequest(BaseModel):
+    repo_url: str
+
+
+class DetectedProject(BaseModel):
+    name: str
+    path: str
+    language: str
+
+
+class DetectProjectsResponse(BaseModel):
+    projects: list[DetectedProject]
 
 
 @router.post("", response_model=RepositoryResponse, status_code=status.HTTP_200_OK)
@@ -113,3 +137,51 @@ async def deactivate_repository(repo_id: str) -> dict:
     if not ok:
         raise HTTPException(status_code=404, detail="Repository not found")
     return {"status": "deactivated"}
+
+
+# ── Project detection endpoint ─────────────────────────────────────────────────
+
+
+@router.post("/detect-projects", response_model=DetectProjectsResponse)
+async def detect_repo_projects(body: DetectProjectsRequest) -> DetectProjectsResponse:
+    """Shallow-clone a repository and detect top-level sub-projects.
+
+    Returns a list of candidate projects based on the presence of well-known
+    project indicator files (package.json, requirements.txt, go.mod, etc.).
+    Detection completes in 1-2 seconds thanks to a shallow clone.
+    """
+    repo_url = body.repo_url.strip()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Shallow clone — only need directory structure, no history
+        proc = await asyncio.create_subprocess_exec(
+            "git", "clone", "--depth", "1", "--filter=blob:none",
+            "--no-checkout", repo_url, tmpdir,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+        except asyncio.TimeoutError:
+            logger.warning("[detect-projects] Clone timed out for %s", repo_url)
+            raise HTTPException(status_code=408, detail="Repository clone timed out")
+
+        if proc.returncode != 0:
+            err = stderr.decode()[:300]
+            logger.warning("[detect-projects] Clone failed for %s: %s", repo_url, err)
+            raise HTTPException(status_code=422, detail=f"Could not clone repository: {err}")
+
+        # Checkout only the tree (no blobs) so we can read directory layout
+        proc2 = await asyncio.create_subprocess_exec(
+            "git", "-C", tmpdir, "checkout",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await asyncio.wait_for(proc2.communicate(), timeout=30)
+
+        projects = detect_projects(tmpdir)
+        logger.info("[detect-projects] Found %d projects in %s", len(projects), repo_url)
+
+    return DetectProjectsResponse(
+        projects=[DetectedProject(**p) for p in projects]
+    )
