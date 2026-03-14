@@ -143,7 +143,7 @@ export const Dashboard: React.FC = () => {
         <line x1="12" y1="16" x2="12.01" y2="16" />
       </svg>
       <div style={{ color: "var(--danger)", fontSize: 14 }}>{error || "Failed to load dashboard"}</div>
-      <Link to="/" style={{ fontSize: 13, color: "var(--text-muted)" }}>← Back to home</Link>
+      <Link to="/repos" style={{ fontSize: 13, color: "var(--text-muted)" }}>← Back to repositories</Link>
     </div>
   );
 
@@ -178,7 +178,7 @@ export const Dashboard: React.FC = () => {
       }}>
         <div style={{ display: "flex", align: "center", gap: 16, alignItems: "center" } as React.CSSProperties}>
           <Link
-            to="/"
+            to="/repos"
             style={{
               color: "var(--text-muted)",
               textDecoration: "none",
