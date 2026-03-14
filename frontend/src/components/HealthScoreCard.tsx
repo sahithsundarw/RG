@@ -8,23 +8,25 @@ interface Props {
 }
 
 const velocityColor: Record<string, string> = {
-  IMPROVING: "#16A34A", STABLE: "#64748B", DEGRADING: "#DC2626",
+  IMPROVING: "var(--success)",
+  STABLE:    "var(--text-muted)",
+  DEGRADING: "var(--danger)",
 };
 
 const VelocityArrow: React.FC<{ velocity: string }> = ({ velocity }) => {
-  const color = velocityColor[velocity] ?? "#64748B";
+  const color = velocityColor[velocity] ?? "var(--text-muted)";
   if (velocity === "IMPROVING") return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="18 15 12 9 6 15" />
     </svg>
   );
   if (velocity === "DEGRADING") return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="6 9 12 15 18 9" />
     </svg>
   );
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <line x1="5" y1="12" x2="19" y2="12" />
       <polyline points="14 7 19 12 14 17" />
     </svg>
@@ -32,42 +34,62 @@ const VelocityArrow: React.FC<{ velocity: string }> = ({ velocity }) => {
 };
 
 export const HealthScoreCard: React.FC<Props> = ({ score, grade, delta7d, velocity }) => {
-  const vColor = velocityColor[velocity] ?? "#64748B";
+  const vColor = velocityColor[velocity] ?? "var(--text-muted)";
   return (
     <div style={{
-      background: "#FFFFFF",
-      border: "1px solid #E2E8F0",
-      borderRadius: 16,
-      padding: "28px 24px",
+      background: "var(--surface)",
+      border: "1px solid var(--border)",
+      borderRadius: "var(--radius-xl)",
+      padding: "28px 20px",
       display: "flex",
       flexDirection: "column",
       alignItems: "center",
-      gap: 8,
-      minWidth: 180,
-      boxShadow: "0 1px 3px 0 rgba(0,0,0,0.07)",
+      gap: 10,
+      boxShadow: "var(--shadow-sm)",
     }}>
-      {/* Score + Grade row */}
       <div style={{ display: "flex", alignItems: "baseline", gap: 0 }}>
-        <span style={{ fontSize: 80, fontWeight: 800, color: "#0F172A", lineHeight: 1 }}>
+        <span style={{
+          fontSize: 72,
+          fontWeight: 800,
+          color: "var(--text-primary)",
+          lineHeight: 1,
+          letterSpacing: "-0.04em",
+        }}>
           {Math.round(score)}
         </span>
-        <div style={{ width: 1, height: 52, background: "#E2E8F0", margin: "0 14px", flexShrink: 0 }} />
-        <span style={{ fontSize: 44, fontWeight: 700, color: "#0F172A", lineHeight: 1 }}>
+        <div style={{
+          width: 1,
+          height: 48,
+          background: "var(--border)",
+          margin: "0 14px",
+          flexShrink: 0,
+        }} />
+        <span style={{
+          fontSize: 40,
+          fontWeight: 700,
+          color: "var(--text-primary)",
+          lineHeight: 1,
+        }}>
           {grade}
         </span>
       </div>
 
-      {/* Divider */}
-      <div style={{ width: "100%", borderBottom: "1px solid #E2E8F0", margin: "4px 0" }} />
+      <div style={{ width: "100%", borderBottom: "1px solid var(--border)", margin: "4px 0" }} />
 
-      {/* Delta row */}
-      <div style={{ display: "flex", alignItems: "center", gap: 6, color: vColor, fontSize: 14, fontWeight: 600 }}>
+      <div style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 5,
+        color: vColor,
+        fontSize: 13,
+        fontWeight: 600,
+      }}>
         <VelocityArrow velocity={velocity} />
-        {delta7d > 0 ? "+" : ""}{delta7d.toFixed(1)} pts (7d)
+        {delta7d > 0 ? "+" : ""}{delta7d.toFixed(1)} pts
       </div>
 
-      <div style={{ color: "#64748B", fontSize: 12, letterSpacing: "0.02em" }}>
-        Health Score
+      <div style={{ fontSize: 11, color: "var(--text-muted)", letterSpacing: "0.06em", textTransform: "uppercase" }}>
+        7-day delta
       </div>
     </div>
   );

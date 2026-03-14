@@ -1,21 +1,20 @@
 import React from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { ThemeProvider } from "./context/ThemeContext";
 import { RepositoryList } from "./pages/RepositoryList";
 import { Dashboard } from "./pages/Dashboard";
 
 export const App: React.FC = () => (
-  <BrowserRouter>
-    <div style={{
-      minHeight: "100vh",
-      background: "#F9FAFB",
-      fontFamily: "'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-    }}>
-      <Routes>
-        <Route path="/" element={<RepositoryList />} />
-        <Route path="/repo/:repoId" element={<Dashboard />} />
-      </Routes>
-    </div>
-  </BrowserRouter>
+  <ThemeProvider>
+    <BrowserRouter>
+      <div style={{ minHeight: "100vh", background: "var(--bg)", transition: "background 0.2s ease" }}>
+        <Routes>
+          <Route path="/" element={<RepositoryList />} />
+          <Route path="/repo/:repoId" element={<Dashboard />} />
+        </Routes>
+      </div>
+    </BrowserRouter>
+  </ThemeProvider>
 );
 
 export default App;

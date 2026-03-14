@@ -7,38 +7,49 @@ interface Props {
   onAction?: () => void;
 }
 
-const severityText: Record<string, string> = {
-  CRITICAL: "#DC2626", HIGH: "#EA580C",
-  MEDIUM: "#CA8A04", LOW: "#16A34A", INFO: "#64748B",
+const SEV_COLOR: Record<string, string> = {
+  CRITICAL: "#EF4444",
+  HIGH:     "#F59E0B",
+  MEDIUM:   "#CA8A04",
+  LOW:      "#10B981",
+  INFO:     "var(--text-muted)",
 };
 
-const severityBorder: Record<string, string> = {
-  CRITICAL: "#FCA5A5", HIGH: "#FDBA74",
-  MEDIUM: "#FDE047", LOW: "#86EFAC", INFO: "#E2E8F0",
+const SEV_BG: Record<string, string> = {
+  CRITICAL: "rgba(239,68,68,0.08)",
+  HIGH:     "rgba(245,158,11,0.08)",
+  MEDIUM:   "rgba(202,138,4,0.08)",
+  LOW:      "rgba(16,185,129,0.08)",
+  INFO:     "var(--bg-alt)",
 };
 
-const statusConfig: Record<string, { color: string; border: string; label: string }> = {
-  open:     { color: "#0F172A",  border: "#CBD5E1", label: "Open" },
-  approved: { color: "#16A34A", border: "#86EFAC", label: "Approved" },
-  rejected: { color: "#DC2626", border: "#FCA5A5", label: "Rejected" },
-  snoozed:  { color: "#94A3B8", border: "#E2E8F0", label: "Snoozed" },
+const SEV_BORDER: Record<string, string> = {
+  CRITICAL: "rgba(239,68,68,0.3)",
+  HIGH:     "rgba(245,158,11,0.3)",
+  MEDIUM:   "rgba(202,138,4,0.3)",
+  LOW:      "rgba(16,185,129,0.3)",
+  INFO:     "var(--border)",
 };
 
-const ChevronDown = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="6 9 12 15 18 9" />
-  </svg>
-);
+const STATUS_CFG: Record<string, { color: string; label: string }> = {
+  open:     { color: "var(--text-secondary)", label: "Open"     },
+  approved: { color: "var(--success)",        label: "Approved" },
+  rejected: { color: "var(--danger)",         label: "Rejected" },
+  snoozed:  { color: "var(--text-muted)",     label: "Snoozed"  },
+};
 
-const ChevronUp = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="18 15 12 9 6 15" />
+const Chevron: React.FC<{ up?: boolean }> = ({ up }) => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    {up
+      ? <polyline points="18 15 12 9 6 15" />
+      : <polyline points="6 9 12 15 18 9" />
+    }
   </svg>
 );
 
 export const FindingsTable: React.FC<Props> = ({ findings, onAction }) => {
   const [expanded, setExpanded] = useState<string | null>(null);
-  const [loading, setLoading] = useState<string | null>(null);
+  const [loading,  setLoading]  = useState<string | null>(null);
 
   const handleAction = async (findingId: string, action: string) => {
     setLoading(findingId + action);
@@ -54,65 +65,84 @@ export const FindingsTable: React.FC<Props> = ({ findings, onAction }) => {
 
   return (
     <div style={{
-      background: "#FFFFFF",
-      border: "1px solid #E2E8F0",
-      borderRadius: 12,
+      background: "var(--surface)",
+      border: "1px solid var(--border)",
+      borderRadius: "var(--radius-lg)",
       overflow: "hidden",
-      boxShadow: "0 1px 3px 0 rgba(0,0,0,0.07)",
+      boxShadow: "var(--shadow-sm)",
     }}>
+      {/* Table header */}
       <div style={{
-        padding: "14px 20px",
-        borderBottom: "1px solid #E2E8F0",
-        background: "#F9FAFB",
+        padding: "12px 20px",
+        borderBottom: "1px solid var(--border)",
+        background: "var(--bg)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
       }}>
-        <h3 style={{ color: "#0F172A", margin: 0, fontSize: 14, fontWeight: 600 }}>
-          Active Findings ({findings.length})
+        <h3 style={{ color: "var(--text-primary)", margin: 0, fontSize: 13, fontWeight: 600 }}>
+          Active Findings
         </h3>
+        <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+          {findings.length} result{findings.length !== 1 ? "s" : ""}
+        </span>
       </div>
 
       {findings.length === 0 && (
-        <div style={{ padding: 32, textAlign: "center", color: "#64748B", fontSize: 14 }}>
-          No active findings
+        <div style={{
+          padding: "40px 20px",
+          textAlign: "center",
+          color: "var(--text-muted)",
+          fontSize: 13,
+        }}>
+          No findings in this category.
         </div>
       )}
 
       {findings.map((f) => {
-        const sc = statusConfig[f.status] ?? statusConfig.open;
+        const sc = STATUS_CFG[f.status] ?? STATUS_CFG.open;
+        const isExpanded = expanded === f.id;
         return (
-          <div key={f.id} style={{ borderBottom: "1px solid #E2E8F0" }}>
+          <div key={f.id} style={{ borderBottom: "1px solid var(--border)" }}>
             {/* Row */}
             <div
               style={{
-                padding: "12px 20px",
+                padding: "11px 20px",
                 display: "flex",
                 alignItems: "center",
                 gap: 12,
                 cursor: "pointer",
+                transition: "background 0.1s",
               }}
-              onClick={() => setExpanded(expanded === f.id ? null : f.id)}
+              onClick={() => setExpanded(isExpanded ? null : f.id)}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-hover)")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
             >
               {/* Severity badge */}
               <span style={{
-                border: `1px solid ${severityBorder[f.severity] ?? "#E2E8F0"}`,
-                color: severityText[f.severity] ?? "#64748B",
-                fontSize: 11,
-                fontWeight: 600,
-                padding: "2px 8px",
-                borderRadius: 4,
-                minWidth: 64,
+                background: SEV_BG[f.severity] ?? "var(--bg-alt)",
+                border: `1px solid ${SEV_BORDER[f.severity] ?? "var(--border)"}`,
+                color: SEV_COLOR[f.severity] ?? "var(--text-muted)",
+                fontSize: 10,
+                fontWeight: 700,
+                padding: "2px 7px",
+                borderRadius: "var(--radius-sm)",
+                minWidth: 60,
                 textAlign: "center",
-                background: "transparent",
                 flexShrink: 0,
+                letterSpacing: "0.04em",
               }}>
                 {f.severity}
               </span>
 
               {/* Title */}
-              <div style={{ flex: 1, color: "#0F172A", fontSize: 14 }}>
-                {f.title}
+              <div style={{ flex: 1, color: "var(--text-primary)", fontSize: 13, overflow: "hidden" }}>
+                <span>{f.title}</span>
                 {f.file_path && (
                   <span style={{
-                    color: "#64748B", marginLeft: 8, fontSize: 12,
+                    color: "var(--text-muted)",
+                    marginLeft: 8,
+                    fontSize: 11,
                     fontFamily: "'JetBrains Mono','Fira Code',monospace",
                   }}>
                     {f.file_path}{f.line_start ? `:${f.line_start}` : ""}
@@ -122,78 +152,103 @@ export const FindingsTable: React.FC<Props> = ({ findings, onAction }) => {
 
               {/* Status */}
               <span style={{
-                border: `1px solid ${sc.border}`,
                 color: sc.color,
                 fontSize: 11,
-                padding: "2px 8px",
-                borderRadius: 4,
-                background: "transparent",
+                fontWeight: 500,
                 flexShrink: 0,
               }}>
                 {sc.label}
               </span>
 
               {/* Confidence */}
-              <span style={{ color: "#64748B", fontSize: 12, minWidth: 40, textAlign: "right", flexShrink: 0 }}>
+              <span style={{ color: "var(--text-muted)", fontSize: 11, minWidth: 32, textAlign: "right", flexShrink: 0 }}>
                 {Math.round(f.confidence * 100)}%
               </span>
 
               <span style={{ flexShrink: 0 }}>
-                {expanded === f.id ? <ChevronUp /> : <ChevronDown />}
+                <Chevron up={isExpanded} />
               </span>
             </div>
 
-            {/* Expanded details */}
-            {expanded === f.id && (
+            {/* Expanded detail */}
+            {isExpanded && (
               <div style={{
-                padding: "0 20px 16px",
-                borderTop: "1px solid #E2E8F0",
-                background: "#F9FAFB",
+                padding: "0 20px 18px",
+                borderTop: "1px solid var(--border)",
+                background: "var(--bg)",
+                animation: "fadeIn 0.15s ease",
               }}>
-                <p style={{ color: "#64748B", fontSize: 14, margin: "12px 0 8px", lineHeight: 1.6 }}>
+                <p style={{
+                  color: "var(--text-secondary)",
+                  fontSize: 13,
+                  margin: "14px 0 10px",
+                  lineHeight: 1.65,
+                }}>
                   {f.description}
                 </p>
 
                 {f.evidence && (
                   <pre style={{
-                    background: "#F1F5F9", color: "#0F172A",
-                    border: "1px solid #E2E8F0",
-                    padding: 12, borderRadius: 6,
-                    fontSize: 12, overflowX: "auto",
+                    background: "var(--surface)",
+                    color: "var(--text-primary)",
+                    border: "1px solid var(--border)",
+                    padding: "10px 12px",
+                    borderRadius: "var(--radius-md)",
+                    fontSize: 11,
+                    overflowX: "auto",
                     margin: "8px 0",
                     fontFamily: "'JetBrains Mono','Fira Code',monospace",
+                    lineHeight: 1.6,
                   }}>
                     {f.evidence}
                   </pre>
                 )}
 
                 {f.suggested_fix && (
-                  <div style={{ marginTop: 8 }}>
-                    <div style={{ color: "#0F172A", fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+                  <div style={{ marginTop: 10 }}>
+                    <div style={{
+                      fontSize: 11,
+                      fontWeight: 600,
+                      color: "var(--text-muted)",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.06em",
+                      marginBottom: 6,
+                    }}>
                       Suggested Fix
                     </div>
                     <pre style={{
-                      background: "#F1F5F9", color: "#0F172A",
-                      border: "1px solid #E2E8F0",
-                      padding: 12, borderRadius: 6,
-                      fontSize: 12, overflowX: "auto",
+                      background: "var(--success-soft)",
+                      color: "var(--text-primary)",
+                      border: "1px solid var(--success-border)",
+                      padding: "10px 12px",
+                      borderRadius: "var(--radius-md)",
+                      fontSize: 11,
+                      overflowX: "auto",
                       fontFamily: "'JetBrains Mono','Fira Code',monospace",
+                      lineHeight: 1.6,
                     }}>
                       {f.suggested_fix}
                     </pre>
                   </div>
                 )}
 
-                {/* HITL Actions */}
+                {/* HITL actions */}
                 {f.status === "open" && (
-                  <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                  <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
                     <button
                       onClick={(e) => { e.stopPropagation(); handleAction(f.id, "approve"); }}
                       disabled={loading === f.id + "approve"}
                       style={{
-                        padding: "5px 14px", fontSize: 12, fontWeight: 600,
-                        border: "1px solid #86EFAC", borderRadius: 6,
-                        color: "#16A34A", background: "transparent", cursor: "pointer",
+                        padding: "4px 12px",
+                        fontSize: 12,
+                        fontWeight: 600,
+                        border: "1px solid var(--success-border)",
+                        borderRadius: "var(--radius-sm)",
+                        color: "var(--success)",
+                        background: "var(--success-soft)",
+                        cursor: "pointer",
+                        transition: "opacity 0.15s",
+                        opacity: loading === f.id + "approve" ? 0.5 : 1,
                       }}
                     >
                       Approve
@@ -202,9 +257,16 @@ export const FindingsTable: React.FC<Props> = ({ findings, onAction }) => {
                       onClick={(e) => { e.stopPropagation(); handleAction(f.id, "reject"); }}
                       disabled={loading === f.id + "reject"}
                       style={{
-                        padding: "5px 14px", fontSize: 12, fontWeight: 600,
-                        border: "1px solid #FCA5A5", borderRadius: 6,
-                        color: "#DC2626", background: "transparent", cursor: "pointer",
+                        padding: "4px 12px",
+                        fontSize: 12,
+                        fontWeight: 600,
+                        border: "1px solid var(--danger-border)",
+                        borderRadius: "var(--radius-sm)",
+                        color: "var(--danger)",
+                        background: "var(--danger-soft)",
+                        cursor: "pointer",
+                        transition: "opacity 0.15s",
+                        opacity: loading === f.id + "reject" ? 0.5 : 1,
                       }}
                     >
                       Reject
@@ -212,18 +274,25 @@ export const FindingsTable: React.FC<Props> = ({ findings, onAction }) => {
                     <button
                       onClick={(e) => { e.stopPropagation(); handleAction(f.id, "snooze"); }}
                       style={{
-                        padding: "5px 14px", fontSize: 12,
-                        border: "1px solid #E2E8F0", borderRadius: 6,
-                        color: "#64748B", background: "transparent", cursor: "pointer",
+                        padding: "4px 12px",
+                        fontSize: 12,
+                        border: "1px solid var(--border)",
+                        borderRadius: "var(--radius-sm)",
+                        color: "var(--text-muted)",
+                        background: "transparent",
+                        cursor: "pointer",
+                        transition: "background 0.15s",
                       }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-hover)")}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                     >
                       Snooze 7d
                     </button>
                   </div>
                 )}
 
-                <div style={{ color: "#94A3B8", fontSize: 11, marginTop: 10 }}>
-                  ID: {f.id.substring(0, 8)} · Agent: {f.agent_source} · PR #{f.pr_number}
+                <div style={{ color: "var(--text-muted)", fontSize: 10, marginTop: 12, fontFamily: "'JetBrains Mono','Fira Code',monospace" }}>
+                  {f.id.substring(0, 8)} · {f.agent_source} · PR #{f.pr_number}
                   {f.cwe_id && ` · ${f.cwe_id}`}
                 </div>
               </div>

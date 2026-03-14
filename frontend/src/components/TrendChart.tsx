@@ -5,52 +5,76 @@ import {
 } from "recharts";
 import type { TrendPoint } from "../api/client";
 import { format, parseISO } from "date-fns";
+import { useTheme } from "../context/ThemeContext";
 
 interface Props {
   data: TrendPoint[];
 }
 
 export const TrendChart: React.FC<Props> = ({ data }) => {
+  const { isDark } = useTheme();
+
   const chartData = data.map((d) => ({
-    date: format(parseISO(d.timestamp), "MMM d"),
+    date:  format(parseISO(d.timestamp), "MMM d"),
     score: Math.round(d.overall_score),
     grade: d.grade,
   }));
 
+  const gridColor     = isDark ? "#1E2D45" : "#E9E7F3";
+  const axisColor     = isDark ? "#64748B" : "#9CA3AF";
+  const lineColor     = isDark ? "#8B5CF6" : "#7C3AED";
+  const tooltipBg     = isDark ? "#131C2E" : "#FFFFFF";
+  const tooltipBorder = isDark ? "#1E2D45" : "#E9E7F3";
+  const tooltipText   = isDark ? "#F1F5F9" : "#0F172A";
+
   return (
     <div style={{
-      background: "#FFFFFF",
-      border: "1px solid #E2E8F0",
-      borderRadius: 12,
-      padding: 24,
-      boxShadow: "0 1px 3px 0 rgba(0,0,0,0.07)",
+      background: "var(--surface)",
+      border: "1px solid var(--border)",
+      borderRadius: "var(--radius-lg)",
+      padding: "20px 20px",
+      boxShadow: "var(--shadow-sm)",
     }}>
-      <h3 style={{ color: "#0F172A", margin: "0 0 16px", fontSize: 14, fontWeight: 600 }}>
+      <h3 style={{ color: "var(--text-primary)", margin: "0 0 14px", fontSize: 13, fontWeight: 600 }}>
         30-Day Health Trend
       </h3>
       <ResponsiveContainer width="100%" height={200}>
         <LineChart data={chartData}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
-          <XAxis dataKey="date" tick={{ fill: "#64748B", fontSize: 11 }} />
-          <YAxis domain={[0, 100]} tick={{ fill: "#64748B", fontSize: 11 }} />
+          <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
+          <XAxis dataKey="date" tick={{ fill: axisColor, fontSize: 10 }} />
+          <YAxis domain={[0, 100]} tick={{ fill: axisColor, fontSize: 10 }} />
           <Tooltip
             contentStyle={{
-              background: "#FFFFFF", border: "1px solid #E2E8F0",
-              color: "#0F172A", borderRadius: 8, fontSize: 13,
+              background: tooltipBg,
+              border: `1px solid ${tooltipBorder}`,
+              color: tooltipText,
+              borderRadius: 8,
+              fontSize: 12,
+              boxShadow: isDark ? "0 4px 16px rgba(0,0,0,0.4)" : "0 4px 16px rgba(0,0,0,0.08)",
             }}
             formatter={(v: number, _: string, props: { payload: { grade: string } }) =>
               [`${v} (${props.payload.grade})`, "Health Score"]
             }
           />
-          <ReferenceLine y={75} stroke="#86EFAC" strokeDasharray="4 2" label={{ value: "B", fill: "#16A34A", fontSize: 11 }} />
-          <ReferenceLine y={60} stroke="#FDE047" strokeDasharray="4 2" label={{ value: "C", fill: "#CA8A04", fontSize: 11 }} />
+          <ReferenceLine
+            y={75}
+            stroke={isDark ? "rgba(139,92,246,0.35)" : "rgba(124,58,237,0.25)"}
+            strokeDasharray="4 2"
+            label={{ value: "B", fill: isDark ? "#8B5CF6" : "#7C3AED", fontSize: 10 }}
+          />
+          <ReferenceLine
+            y={60}
+            stroke={isDark ? "rgba(236,72,153,0.35)" : "rgba(236,72,153,0.3)"}
+            strokeDasharray="4 2"
+            label={{ value: "C", fill: isDark ? "#EC4899" : "#DB2777", fontSize: 10 }}
+          />
           <Line
             type="monotone"
             dataKey="score"
-            stroke="#0F172A"
-            strokeWidth={2}
-            dot={{ fill: "#0F172A", r: 3 }}
-            activeDot={{ r: 5, fill: "#0F172A" }}
+            stroke={lineColor}
+            strokeWidth={1.5}
+            dot={{ fill: lineColor, r: 2.5 }}
+            activeDot={{ r: 4, fill: lineColor }}
           />
         </LineChart>
       </ResponsiveContainer>

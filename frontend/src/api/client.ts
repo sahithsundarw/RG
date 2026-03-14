@@ -113,7 +113,6 @@ export interface SseDoneEvent {
   health_score: number;
   grade: string;
   total_findings: number;
-  repo_id?: string;
 }
 
 export interface SseErrorEvent {
@@ -178,23 +177,11 @@ export const api = {
     streamUrl: (scanId: string) => `${BASE_URL}/api/scan/${scanId}/stream`,
   },
   monitoring: {
-    register: (config: MonitoringConfig) => {
-      // Parse owner, name, platform from clone URL
-      const m = config.clone_url.match(/(?:github\.com|gitlab\.com|bitbucket\.org)[/:]([^/]+)\/([^/\s.]+?)(?:\.git)?$/);
-      if (!m) throw new Error("Could not parse repository URL. Use https://github.com/owner/repo format.");
-      const owner = m[1];
-      const name = m[2];
-      const platform = config.clone_url.includes("gitlab") ? "gitlab"
-        : config.clone_url.includes("bitbucket") ? "bitbucket"
-        : "github";
-      return post<Repository>("/api/repositories", {
-        platform,
-        owner,
-        name,
+    register: (config: MonitoringConfig) =>
+      post<Repository>("/api/repositories", {
         clone_url: config.clone_url,
-        default_branch: "main",
-        config: { webhook_secret: config.webhook_secret, trigger_events: config.events },
-      });
-    },
+        webhook_secret: config.webhook_secret,
+        trigger_events: config.events,
+      }),
   },
 };

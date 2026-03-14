@@ -3,6 +3,8 @@ Central configuration for RepoGuardian.
 All values can be overridden via environment variables or .env file.
 """
 
+import os
+import tempfile
 from functools import lru_cache
 from typing import Literal
 
@@ -28,6 +30,12 @@ class Settings(BaseSettings):
     # ── API Server ─────────────────────────────────────────────────────────────
     host: str = "0.0.0.0"
     port: int = 8000
+    # Comma-separated origins or list; defaults cover local dev (vite :3000/:5173 + preview :4173)
+    cors_origins: list[str] = [
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://localhost:4173",
+    ]
 
     # ── Redis ──────────────────────────────────────────────────────────────────
     redis_url: str = "redis://localhost:6379/0"
@@ -104,7 +112,8 @@ class Settings(BaseSettings):
     max_reviews_per_org_daily: int = 500
 
     # ── Temporary storage ─────────────────────────────────────────────────────
-    clone_base_dir: str = "/tmp/repoguardian/clones"
+    # Defaults to OS temp dir so it works on both Linux/macOS and Windows
+    clone_base_dir: str = os.path.join(tempfile.gettempdir(), "repoguardian", "clones")
 
     @field_validator("health_weight_code_quality")
     @classmethod
