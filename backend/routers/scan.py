@@ -164,12 +164,14 @@ async def run_audit_for_repo(repo_url: str, scan_path: str = "") -> dict | None:
             )
         ]
         quality_findings = await _run_radon(scan_root)
+        bug_findings = await _run_pylint(scan_root)
+        type_findings = await _run_mypy(scan_root)
         dep_findings = await _run_dep_audit(scan_root)
 
         # ── LLM validation gate ────────────────────────────────────────────────
         validator = _get_tool_validator()
         security_findings = await validator.validate(security_findings, scan_root)
-        quality_findings  = await validator.validate(quality_findings,  scan_root)
+        quality_findings  = await validator.validate(quality_findings + bug_findings + type_findings, scan_root)
 
         # ── Deduplication ──────────────────────────────────────────────────────
         all_findings = deduplicate_findings(security_findings + quality_findings + dep_findings)
@@ -273,6 +275,11 @@ async def _run_flash_audit(scan_id: str, repo_url: str, queue: asyncio.Queue, sc
             raw_quality = await _run_radon(scan_root)
             await emit(f"Code quality analysis complete — {len(raw_quality)} raw findings")
 
+            await emit("Bug Detector running (pylint + mypy)...")
+            raw_bugs  = await _run_pylint(scan_root)
+            raw_types = await _run_mypy(scan_root)
+            await emit(f"Bug detection complete — {len(raw_bugs)} logic issues, {len(raw_types)} type errors")
+
             await emit("Dependency Auditor running (OSV + registry)...")
             dep_findings = await _run_dep_audit(scan_root)
             await emit(f"Dependency audit complete — {len(dep_findings)} issues found")
@@ -281,8 +288,8 @@ async def _run_flash_audit(scan_id: str, repo_url: str, queue: asyncio.Queue, sc
             await emit("AI validating findings (filtering false positives)...")
             validator = _get_tool_validator()
             security_findings = await validator.validate(raw_security, scan_root)
-            quality_findings  = await validator.validate(raw_quality,  scan_root)
-            fp_removed = (len(raw_security) - len(security_findings)) + (len(raw_quality) - len(quality_findings))
+            quality_findings  = await validator.validate(raw_quality + raw_bugs + raw_types, scan_root)
+            fp_removed = (len(raw_security) - len(security_findings)) + ((len(raw_quality) + len(raw_bugs) + len(raw_types)) - len(quality_findings))
             await emit(
                 f"Validation complete — {fp_removed} false positive(s) filtered, "
                 f"{len(security_findings) + len(quality_findings) + len(dep_findings)} confirmed findings"
@@ -554,6 +561,93 @@ async def _run_radon(repo_path: str) -> list[dict]:
         return []
     except (asyncio.TimeoutError, json.JSONDecodeError, Exception) as e:
         logger.debug("radon scan error: %s", e)
+        return []
+
+
+async def _run_pylint(repo_path: str) -> list[dict]:
+    """Pylint: logic bugs, undefined variables, bare excepts, runtime exception risks."""
+    import sys
+    _MSG_SEVERITY = {"fatal": "CRITICAL", "error": "HIGH", "warning": "MEDIUM", "refactor": "LOW", "convention": "INFO"}
+    _RUNTIME_CODES = {"E0601", "E0602", "E0611", "E1120", "E1121", "E0102", "W0631", "E0712", "E0711"}
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-m", "pylint", repo_path,
+            "--output-format=json",
+            "--disable=C,R",
+            "--enable=E,W",
+            "--recursive=yes",
+            "--ignore=.git,venv,.venv,node_modules,__pycache__",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
+        raw = stdout.decode().strip()
+        if not raw:
+            return []
+        data = json.loads(raw)
+        findings = []
+        for msg in data[:40]:
+            msg_type = msg.get("type", "warning")
+            if msg_type in ("convention", "refactor"):
+                continue
+            code = msg.get("message-id", "")
+            category = "BUG" if (msg_type in ("error", "fatal") or code in _RUNTIME_CODES) else "CODE_SMELL"
+            findings.append({
+                "category": category,
+                "severity": _MSG_SEVERITY.get(msg_type, "MEDIUM"),
+                "title": f"{msg.get('symbol', code)} [{code}]",
+                "file": msg.get("path", "").replace(repo_path, "").lstrip("/\\"),
+                "line": msg.get("line", 0),
+                "description": msg.get("message", ""),
+                "suggested_fix": "Review the flagged code for potential runtime errors or logic bugs.",
+                "confidence": "HIGH" if msg_type in ("error", "fatal") else "MEDIUM",
+                "agent_source": "pylint",
+            })
+        return findings
+    except (asyncio.TimeoutError, json.JSONDecodeError, Exception) as e:
+        logger.debug("pylint scan error: %s", e)
+        return []
+
+
+async def _run_mypy(repo_path: str) -> list[dict]:
+    """mypy: static type checking — catches type errors and undefined attributes."""
+    import sys
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-m", "mypy", repo_path,
+            "--ignore-missing-imports",
+            "--no-error-summary",
+            "--show-column-numbers",
+            "--no-color-output",
+            "--no-incremental",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
+        raw = stdout.decode().strip()
+        findings = []
+        for line in raw.splitlines()[:40]:
+            m = re.match(r"^(.+?):(\d+):\d+: (error|warning): (.+?)(?:\s+\[(.+?)\])?$", line)
+            if not m:
+                continue
+            filepath, lineno, level, message, code = m.groups()
+            if "note:" in filepath:
+                continue
+            rel = filepath.replace(repo_path, "").lstrip("/\\")
+            findings.append({
+                "category": "BUG",
+                "severity": "HIGH" if level == "error" else "MEDIUM",
+                "title": f"Type error: {code or 'type-check'}",
+                "file": rel,
+                "line": int(lineno),
+                "description": message,
+                "suggested_fix": "Fix the type mismatch or add appropriate type annotations.",
+                "confidence": "HIGH",
+                "agent_source": "mypy",
+            })
+        return findings
+    except (asyncio.TimeoutError, Exception) as e:
+        logger.debug("mypy scan error: %s", e)
         return []
 
 

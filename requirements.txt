@@ -45,6 +45,8 @@ structlog==24.4.0
 rich==13.9.4
 bandit==1.8.3
 radon==6.0.1
+pylint==3.3.4
+mypy==1.13.0
 
 # Testing
 pytest==8.3.4
